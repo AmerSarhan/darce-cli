@@ -1,5 +1,5 @@
 {
-  "name": "darce",
+  "name": "darce-cli",
   "version": "0.1.0",
   "description": "A blazing-fast CLI coding agent powered by OpenRouter",
   "type": "module",
@@ -11,9 +11,15 @@
     "dev": "tsx src/entrypoints/cli.tsx",
     "start": "node dist/cli.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["cli", "ai", "coding", "agent", "openrouter", "darce"],
+  "author": "Amer Sarhan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AmerSarhan/darce-cli.git"
+  },
+  "homepage": "https://darce.dev",
+  "files": ["dist"],
   "dependencies": {
     "chalk": "^5.6.2",
     "cli-highlight": "^2.1.11",
