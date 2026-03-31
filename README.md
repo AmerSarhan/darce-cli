@@ -126,8 +126,6 @@ src/
 
 Built with TypeScript, [Ink](https://github.com/vadimdemedes/ink), Zod, and [tsup](https://github.com/egoist/tsup).
 
-Inspired by [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
-
 ## License
 
 MIT
