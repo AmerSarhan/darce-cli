@@ -1,0 +1,35 @@
+{
+  "name": "darce",
+  "version": "0.1.0",
+  "description": "A blazing-fast CLI coding agent powered by OpenRouter",
+  "type": "module",
+  "bin": {
+    "darce": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/entrypoints/cli.tsx",
+    "start": "node dist/cli.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "cli-highlight": "^2.1.11",
+    "globby": "^16.2.0",
+    "ink": "^5.2.1",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
+    "react": "^18.3.1",
+    "zod": "^4.3.6",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}
