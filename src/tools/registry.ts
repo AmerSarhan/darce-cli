@@ -1,4 +1,4 @@
-import { zodToJsonSchema } from 'zod-to-json-schema'
+import { z } from 'zod'
 import type { ToolDef } from './Tool.js'
 import type { OpenRouterTool } from '../providers/provider.js'
 
@@ -22,7 +22,7 @@ export function toAPITools(): OpenRouterTool[] {
     function: {
       name: t.name,
       description: t.description,
-      parameters: zodToJsonSchema(t.inputSchema as any, { target: 'openApi3' }) as Record<string, unknown>,
+      parameters: z.toJSONSchema(t.inputSchema) as Record<string, unknown>,
     },
   }))
 }
