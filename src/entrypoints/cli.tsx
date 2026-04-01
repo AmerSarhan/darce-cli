@@ -33,7 +33,7 @@ if (args[0] === 'login') {
     process.exit(1)
   })
 } else if (args[0] === 'logout') {
-  logoutFlow()
+  logoutFlow().catch(err => { console.error(err.message); process.exit(1) })
 } else {
   // Parse --model flag
   let modelOverride: string | undefined
@@ -115,10 +115,10 @@ async function authFlow() {
   console.log(`  You're ready — just run: darce\n`)
 }
 
-function logoutFlow() {
-  const { existsSync, unlinkSync } = require('node:fs')
-  const { join } = require('node:path')
-  const { homedir } = require('node:os')
+async function logoutFlow() {
+  const { existsSync, unlinkSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { homedir } = await import('node:os')
   const rcPath = join(homedir(), '.darcerc')
   if (existsSync(rcPath)) {
     unlinkSync(rcPath)
