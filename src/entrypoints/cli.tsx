@@ -2,7 +2,7 @@
 const args = process.argv.slice(2)
 
 if (args.includes('--version') || args.includes('-v')) {
-  console.log('0.1.0')
+  console.log('0.2.0')
   process.exit(0)
 }
 
@@ -14,15 +14,10 @@ if (args.includes('--help') || args.includes('-h')) {
     darce                           Interactive REPL
     darce "fix the login bug"       Start with a prompt
     darce --model <id>              Override model
+    darce login                     Sign in / create account
+    darce logout                    Remove saved credentials
     darce --version                 Print version
     darce --help                    Show this help
-
-  Config:
-    ~/.darcerc                      Global config (JSON)
-    ./.darcerc                      Project config (JSON)
-    DARCE_API_KEY                   API key env var
-    DARCE_MODEL                     Default model env var
-    DARCE_DEBUG=1                   Enable debug logging
 
   Hotkeys:
     Ctrl+M                          Switch model
@@ -31,25 +26,116 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0)
 }
 
-// Parse --model flag
-let modelOverride: string | undefined
-const modelIndex = args.indexOf('--model')
-if (modelIndex !== -1 && args[modelIndex + 1]) {
-  modelOverride = args[modelIndex + 1]
-  args.splice(modelIndex, 2)
+// Auth commands — handle before loading heavy deps
+if (args[0] === 'login') {
+  authFlow().then(() => process.exit(0)).catch(err => {
+    console.error(err.message)
+    process.exit(1)
+  })
+} else if (args[0] === 'logout') {
+  logoutFlow()
+} else {
+  // Parse --model flag
+  let modelOverride: string | undefined
+  const modelIndex = args.indexOf('--model')
+  if (modelIndex !== -1 && args[modelIndex + 1]) {
+    modelOverride = args[modelIndex + 1]
+    args.splice(modelIndex, 2)
+  }
+
+  const initialPrompt = args.join(' ').trim() || undefined
+  main(modelOverride, initialPrompt).catch(err => {
+    console.error('Fatal error:', err.message)
+    process.exit(1)
+  })
 }
 
-// Remaining args are the initial prompt
-const initialPrompt = args.join(' ').trim() || undefined
+// === Auth Flow ===
+async function authFlow() {
+  const { createInterface } = await import('node:readline')
+  const { writeFileSync, existsSync, readFileSync, mkdirSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { homedir } = await import('node:os')
 
-// Dynamic import — only load heavy deps when needed
-async function main() {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  const ask = (q: string): Promise<string> => new Promise(r => rl.question(q, r))
+
+  console.log('\n  Welcome to Darce\n')
+
+  const email = await ask('  Email: ')
+  const password = await ask('  Password: ')
+  rl.close()
+
+  console.log('\n  Connecting...')
+
+  // Try login first, then register
+  let data: any
+  let res = await fetch('https://api.darce.dev/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+
+  if (res.ok) {
+    data = await res.json()
+    console.log('  Signed in!')
+  } else {
+    // Try register
+    res = await fetch('https://api.darce.dev/v1/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+    if (res.ok) {
+      data = await res.json()
+      console.log('  Account created!')
+    } else {
+      const err = await res.json()
+      throw new Error(`  ${err.message || err.error || 'Auth failed'}`)
+    }
+  }
+
+  // Save to ~/.darcerc
+  const rcPath = join(homedir(), '.darcerc')
+  let existing: Record<string, unknown> = {}
+  try {
+    if (existsSync(rcPath)) {
+      existing = JSON.parse(readFileSync(rcPath, 'utf-8'))
+    }
+  } catch {}
+
+  existing.apiKey = data.api_key
+  existing.apiBase = 'https://api.darce.dev'
+
+  const dir = join(homedir(), '.darce')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  writeFileSync(rcPath, JSON.stringify(existing, null, 2) + '\n')
+
+  console.log(`\n  API key saved to ~/.darcerc`)
+  console.log(`  You're ready — just run: darce\n`)
+}
+
+function logoutFlow() {
+  const { existsSync, unlinkSync } = require('node:fs')
+  const { join } = require('node:path')
+  const { homedir } = require('node:os')
+  const rcPath = join(homedir(), '.darcerc')
+  if (existsSync(rcPath)) {
+    unlinkSync(rcPath)
+    console.log('\n  Logged out. ~/.darcerc removed.\n')
+  } else {
+    console.log('\n  Not logged in.\n')
+  }
+  process.exit(0)
+}
+
+// === Main REPL ===
+async function main(modelOverride?: string, initialPrompt?: string) {
   const { loadConfig } = await import('../config/config.js')
   const config = loadConfig()
 
   if (!config.apiKey) {
-    console.error('Error: No API key found.')
-    console.error('Set DARCE_API_KEY environment variable or add "apiKey" to ~/.darcerc')
+    console.log('\n  No API key found. Run `darce login` to get started.\n')
     process.exit(1)
   }
 
@@ -80,7 +166,6 @@ async function main() {
   const { saveCosts } = await import('../state/costTracker.js')
   const { getTotalCost, formatCostSummary } = await import('../state/costTracker.js')
 
-  // Save costs on exit
   process.on('exit', () => {
     const cost = getTotalCost()
     if (cost > 0) {
@@ -95,8 +180,3 @@ async function main() {
 
   await waitUntilExit()
 }
-
-main().catch(err => {
-  console.error('Fatal error:', err.message)
-  process.exit(1)
-})

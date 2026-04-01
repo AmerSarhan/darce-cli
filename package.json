@@ -1,6 +1,6 @@
 {
   "name": "darce-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A blazing-fast CLI coding agent powered by OpenRouter",
   "type": "module",
   "bin": {
