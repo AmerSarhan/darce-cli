@@ -351,7 +351,7 @@ function SpinnerView({ mode, label }: { mode: SpinnerMode; label: string }) {
   )
 }
 
-// === Tool Summary (Claude Code style — show the key info) ===
+// === Tool Summary ===
 
 function toolSummary(name: string, input: Record<string, unknown>): string {
   switch (name) {

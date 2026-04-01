@@ -76,7 +76,7 @@ function ContentBlockView({ block, role }: { block: ContentBlock; role: string }
   }
 }
 
-// Claude Code style: show the key info, not raw JSON
+// Show the key info, not raw JSON
 function formatToolSummary(name: string, input: Record<string, unknown>): string {
   switch (name) {
     case 'Bash':
