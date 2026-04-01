@@ -1,6 +1,6 @@
 {
   "name": "darce-cli",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "A blazing-fast AI coding agent for your terminal",
   "type": "module",
   "bin": {
@@ -12,12 +12,27 @@
     "start": "node dist/cli.js"
   },
   "keywords": [
-    "cli",
     "ai",
-    "coding",
-    "agent",
+    "cli",
+    "coding-agent",
     "terminal",
-    "darce"
+    "ai-agent",
+    "code-generation",
+    "developer-tools",
+    "llm",
+    "devtools",
+    "automation",
+    "code-assistant",
+    "darce",
+    "deepseek",
+    "gemini",
+    "grok",
+    "qwen",
+    "claude",
+    "copilot-alternative",
+    "cursor-alternative",
+    "nodejs",
+    "typescript"
   ],
   "author": "Amer Sarhan",
   "license": "MIT",
