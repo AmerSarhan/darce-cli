@@ -7,7 +7,13 @@
       "Bash(npx tsc:*)",
       "WebSearch",
       "Bash(grep -r \"useBlink\\\\|useTheme\\\\|Box\\\\|Text\" /d/downloads/src/src/components/*.tsx)",
-      "Bash(npx tsup:*)"
+      "Bash(npx tsup:*)",
+      "WebFetch(domain:claude.ai)",
+      "WebFetch(domain:www.cursor.sh)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.windsurf.dev)",
+      "Bash(npm version:*)",
+      "Bash(npm publish:*)"
     ]
   }
 }

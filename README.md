@@ -17,7 +17,8 @@
   <a href="https://cli.darce.dev">Website</a> &middot;
   <a href="https://www.npmjs.com/package/darce-cli">npm</a> &middot;
   <a href="#get-started">Get Started</a> &middot;
-  <a href="https://cli.darce.dev/#pricing">Pricing</a>
+  <a href="https://cli.darce.dev/#pricing">Pricing</a> &middot;
+  <a href="https://cli.darce.dev/dashboard">Dashboard</a>
 </p>
 
 ---
@@ -97,6 +98,7 @@ That's it. No config files. No API keys to copy. No Docker.
 - **Session resume** — `darce --resume` picks up where you left off
 - **Context compaction** — stays fast even in long conversations
 - **Cost tracking** — real-time token count and spend in the status bar
+- **Account dashboard** — usage stats at [cli.darce.dev/dashboard](https://cli.darce.dev/dashboard)
 
 ## Models
 
@@ -114,16 +116,34 @@ Switch mid-conversation with `Ctrl+M` or `/model`.
 
 ## Pricing
 
-| | Free | Pro |
-|---|---|---|
-| **Price** | $0 | $20/mo |
-| **Requests** | 50/day | 5,000/day |
-| **Models** | 3 | All |
-| **Tools** | 5 | All 7 |
+Start free. Upgrade when you need more. Cancel anytime.
 
-Start free: `darce login`
+| | Starter | Builder | Power |
+|---|---|---|---|
+| **Price** | Free | $15/mo | $65/mo |
+| **Requests** | 25/mo | 500/mo | 2,500/mo |
+| **Models** | qwen3-coder | All | All + priority |
+| **Tools** | 3 (Read, Grep, Glob) | All 7 | All 7 |
+| **Sessions** | No resume | Resume + history | Resume + history |
+| **Dashboard** | Basic | Full | Full + priority support |
 
-Upgrade: [cli.darce.dev/#pricing](https://cli.darce.dev/#pricing)
+```bash
+darce login           # Start free
+darce upgrade         # Upgrade to Builder or Power
+```
+
+Or sign up at [cli.darce.dev](https://cli.darce.dev)
+
+## Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | List all commands |
+| `/model <id>` | Switch model (`/m` alias) |
+| `/clear` | Clear conversation (`/c` alias) |
+| `/cost` | Show session cost breakdown |
+| `/compact` | Compact conversation history |
+| `/quit` | Exit (`/q` alias) |
 
 ## Config
 
