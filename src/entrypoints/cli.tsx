@@ -57,7 +57,7 @@ async function main() {
   registerAllTools()
 
   const { OpenRouterProvider } = await import('../providers/openrouter.js')
-  const provider = new OpenRouterProvider(config.apiKey)
+  const provider = new OpenRouterProvider(config.apiKey, config.apiBase || undefined)
 
   const { render } = await import('ink')
   const React = await import('react')

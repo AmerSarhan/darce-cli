@@ -60,7 +60,11 @@ function toOpenRouterMessages(messages: Message[]): Array<Record<string, unknown
 }
 
 export class OpenRouterProvider implements Provider {
-  constructor(private apiKey: string) {}
+  private baseUrl: string
+
+  constructor(private apiKey: string, baseUrl?: string) {
+    this.baseUrl = baseUrl || 'https://openrouter.ai/api'
+  }
 
   async *stream(messages: Message[], model: string, tools: OpenRouterTool[]): AsyncGenerator<StreamEvent> {
     yield { type: 'request_start' }
@@ -80,7 +84,7 @@ export class OpenRouterProvider implements Provider {
 
     while (true) {
       try {
-        response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${this.apiKey}`,
@@ -257,7 +261,7 @@ export class OpenRouterProvider implements Provider {
   }
 
   async listModels(): Promise<Array<{ id: string; name: string }>> {
-    const res = await fetch('https://openrouter.ai/api/v1/models', {
+    const res = await fetch(`${this.baseUrl}/v1/models`, {
       headers: { 'Authorization': `Bearer ${this.apiKey}` },
     })
     const data = await res.json() as { data: Array<{ id: string; name: string }> }

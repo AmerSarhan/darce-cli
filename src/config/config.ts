@@ -48,6 +48,7 @@ export function loadConfig(): DarceConfig {
 
   const envOverrides: Record<string, unknown> = {}
   if (process.env.DARCE_API_KEY) envOverrides.apiKey = process.env.DARCE_API_KEY
+  if (process.env.DARCE_API_BASE) envOverrides.apiBase = process.env.DARCE_API_BASE
   if (process.env.DARCE_MODEL) {
     envOverrides.router = { default: process.env.DARCE_MODEL }
   }

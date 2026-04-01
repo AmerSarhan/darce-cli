@@ -79,6 +79,7 @@ export type RouterConfig = {
 
 export type DarceConfig = {
   apiKey: string
+  apiBase?: string
   router: RouterConfig
   theme: 'dark' | 'light' | 'auto'
   shell: string
