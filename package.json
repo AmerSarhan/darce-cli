@@ -1,7 +1,7 @@
 {
   "name": "darce-cli",
-  "version": "0.3.0",
-  "description": "A blazing-fast CLI coding agent powered by OpenRouter",
+  "version": "0.3.1",
+  "description": "A blazing-fast AI coding agent for your terminal",
   "type": "module",
   "bin": {
     "darce": "./dist/cli.js"
@@ -16,7 +16,7 @@
     "ai",
     "coding",
     "agent",
-    "openrouter",
+    "terminal",
     "darce"
   ],
   "author": "Amer Sarhan",

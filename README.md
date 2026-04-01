@@ -1,32 +1,33 @@
-# Darce
+# Darce CLI
 
-A blazing-fast AI coding agent for your terminal. Built by [darce.dev](https://darce.dev).
+A blazing-fast AI coding agent for your terminal. By [darce.dev](https://darce.dev).
+
+[![npm version](https://img.shields.io/npm/v/darce-cli)](https://www.npmjs.com/package/darce-cli)
+[![npm downloads](https://img.shields.io/npm/dw/darce-cli)](https://www.npmjs.com/package/darce-cli)
 
 ```
-╭ Darce v0.1.0 (qwen3-coder)
+> Darce v0.3.0 (qwen3-coder)
 
-> fix the authentication bug in login.ts
+> fix the auth bug in login.ts
 
-  I'll start by reading the file to understand the current implementation.
+  I'll read the file first.
 
-  Read src/auth/login.ts
+  ○ Read src/auth/login.ts
+    1  import { verify } from './jwt'
+    ... 45 more lines
 
-  Found the issue — the token expiry check is comparing timestamps
-  in different formats. Here's the fix:
+  Found it — token expiry compares seconds vs milliseconds.
 
-  Edit src/auth/login.ts
-  ✓ File updated
+  ● Edit src/auth/login.ts
+    File updated
 
-  Let me verify the fix works:
+  ● Bash npm test
+    24/24 tests passing
 
-  Bash npm test
-  ✓ All 24 tests passing
-
-  Fixed. The bug was comparing a Unix timestamp (seconds) against
-  Date.now() (milliseconds). Wrapped it in `* 1000`.
+  Fixed. Wrapped the Unix timestamp in `* 1000`.
 
 > _
-qwen3-coder · 4.2k tokens · $0.0012 | 8s · ~/projects/myapp
+qwen3-coder · 3.1k tokens · $0.0008 | 6s · ~2% ctx · ~/project
 ```
 
 ## Install
@@ -35,96 +36,103 @@ qwen3-coder · 4.2k tokens · $0.0012 | 8s · ~/projects/myapp
 npm install -g darce-cli
 ```
 
-Or run directly:
+## Get Started
 
 ```bash
-npx darce-cli
+darce login          # Create account or sign in
+darce                # Start the REPL
+darce "fix the bug"  # Start with a prompt
+darce --resume       # Continue previous session
 ```
 
-## Setup
-
-Darce uses [OpenRouter](https://openrouter.ai) to access any AI model. Get an API key and set it:
-
-```bash
-# Environment variable
-export DARCE_API_KEY=sk-or-...
-
-# Or config file
-echo '{"apiKey":"sk-or-..."}' > ~/.darcerc
-```
-
-That's it. Start coding:
-
-```bash
-darce                              # Interactive REPL
-darce "explain this codebase"      # Start with a prompt
-darce --model x-ai/grok-4.1-fast  # Use a specific model
-```
+That's it. No config files, no env vars.
 
 ## Features
 
 **7 built-in tools** — Read, Write, Edit, Bash, Glob, Grep, WebFetch. The agent reads your code, makes changes, runs commands, and searches your codebase.
 
-**Smart model routing** — Automatically picks the best model based on your task. Quick question? Uses a fast model. Complex multi-file refactor? Switches to a reasoning model. Override anytime with `Ctrl+M`.
+**Smart model routing** — Automatically picks the best model for the task. Quick question? Fast model. Complex multi-file refactor? Reasoning model. Override with `Ctrl+M` or `/model`.
 
-**Streaming everything** — Responses stream token-by-token. Tool results appear as they complete. No waiting for full responses.
+**Streaming responses** — Text streams line-by-line. Tool calls show live as they execute. No waiting.
 
-**Blazing fast** — Sub-200ms startup. 190ms builds. Lazy imports mean `darce --version` exits in under 10ms.
+**Slash commands** — `/help`, `/model`, `/clear`, `/cost`, `/compact`, `/quit`. Instant local commands without hitting the API.
 
-**Cost tracking** — See per-model token usage and cost in real-time. Session costs persist across restarts.
+**Multi-line input** — Type `"""` or ` ``` ` to enter multi-line mode. Paste code blocks freely.
+
+**Session persistence** — Conversations auto-save. Resume with `darce --resume`.
+
+**Context compaction** — When conversations get long, Darce automatically compacts old messages to stay fast.
+
+**Git-aware** — Knows your branch, status, recent commits, and uncommitted changes.
+
+**Cost tracking** — Per-model token usage and cost in real-time. Context window usage shown as `% ctx`.
+
+**Blazing fast** — Sub-200ms startup. 14 kB on npm. Lazy imports. Tree-shaken.
 
 ## Models
 
-Darce defaults to `qwen/qwen3-coder`. Configure any OpenRouter model in `.darcerc`:
+Switch models mid-conversation with `Ctrl+M` or `/model <id>`.
 
-```json
-{
-  "apiKey": "sk-or-...",
-  "router": {
-    "default": "qwen/qwen3-coder",
-    "rules": [
-      { "when": "large-context", "use": "google/gemini-2.5-pro" },
-      { "when": "quick-question", "use": "deepseek/deepseek-chat" },
-      { "when": "complex-reasoning", "use": "x-ai/grok-4.1-fast" }
-    ]
-  }
-}
-```
+| Model | Strengths |
+|-------|-----------|
+| `qwen/qwen3-coder` | Fast, great at coding (default) |
+| `x-ai/grok-4.1-fast` | Fast, strong reasoning |
+| `anthropic/claude-sonnet-4` | Excellent coding + reasoning |
+| `google/gemini-2.5-pro` | 1M context window |
+| `deepseek/deepseek-r1` | Deep reasoning |
+| `deepseek/deepseek-chat` | Fast, cheap |
+| `meta-llama/llama-4-maverick` | Open source, 1M context |
 
-Switch models mid-conversation with **Ctrl+M**.
+## Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | List all commands |
+| `/model <id>` | Switch model (`/m` alias) |
+| `/clear` | Clear conversation (`/c` alias) |
+| `/cost` | Show session cost breakdown |
+| `/compact` | Compact conversation history |
+| `/quit` | Exit (`/q` alias) |
 
 ## Hotkeys
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+M` | Switch model |
-| `Ctrl+C` | Cancel current request / Exit |
-| `Up/Down` | Navigate input history |
+| `Ctrl+M` | Model picker |
+| `Ctrl+C` | Cancel request / Exit |
+| `Up/Down` | Input history |
+
+## Pricing
+
+| | Free | Pro ($20/mo) |
+|---|------|-------------|
+| Requests | 50/day | 5,000/day |
+| Models | 3 basic | All models |
+| Tools | 5 tools | All 7 tools |
+| Routing | Basic | Smart routing |
+
+Sign up at [cli.darce.dev](https://cli.darce.dev) or run `darce login`.
 
 ## Config
 
-Darce loads config from three layers (later overrides earlier):
+Darce stores credentials in `~/.darcerc` (created by `darce login`). You can also use:
 
-1. `~/.darcerc` — Global defaults
-2. `./.darcerc` — Project-specific
-3. Environment variables — `DARCE_API_KEY`, `DARCE_MODEL`
+- `./.darcerc` — Project-specific overrides
+- `DARCE_API_KEY` / `DARCE_API_BASE` — Environment variables
 
-## Architecture
-
+```json
+{
+  "apiKey": "darce-...",
+  "apiBase": "https://api.darce.dev",
+  "router": {
+    "default": "qwen/qwen3-coder",
+    "rules": [
+      { "when": "large-context", "use": "google/gemini-2.5-pro" },
+      { "when": "complex-reasoning", "use": "x-ai/grok-4.1-fast" }
+    ]
+  }
+}
 ```
-src/
-├── entrypoints/cli.tsx    — CLI entry, arg parsing, lazy boot
-├── core/query.ts          — Async generator conversation loop
-├── core/streaming.ts      — SSE frame parser
-├── providers/openrouter.ts — OpenRouter API + streaming
-├── providers/router.ts    — Smart model selection
-├── tools/                 — 7 tools (Bash, Read, Write, Edit, Glob, Grep, WebFetch)
-├── ui/                    — Ink (React) terminal components
-├── config/                — Layered .darcerc loading
-└── state/costTracker.ts   — Per-model cost tracking
-```
-
-Built with TypeScript, [Ink](https://github.com/vadimdemedes/ink), Zod, and [tsup](https://github.com/egoist/tsup).
 
 ## License
 

@@ -105,7 +105,7 @@ export class OpenRouterProvider implements Provider {
 
         if (!response.ok) {
           const errorText = await response.text()
-          yield { type: 'error', error: `OpenRouter API error ${response.status}: ${errorText}` }
+          yield { type: 'error', error: `API error ${response.status}: ${errorText}` }
           return
         }
 
