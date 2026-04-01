@@ -15,6 +15,7 @@ if (args.includes('--help') || args.includes('-h')) {
     darce "fix the login bug"       Start with a prompt
     darce --model <id>              Override model
     darce login                     Sign in / create account
+    darce upgrade                   Upgrade to Pro ($20/mo)
     darce logout                    Remove saved credentials
     darce --resume, -r              Resume last session
     darce --version                 Print version
@@ -35,6 +36,8 @@ if (args[0] === 'login') {
   })
 } else if (args[0] === 'logout') {
   logoutFlow().catch(err => { console.error(err.message); process.exit(1) })
+} else if (args[0] === 'upgrade') {
+  upgradeFlow().then(() => process.exit(0)).catch(err => { console.error(err.message); process.exit(1) })
 } else {
   // Parse --model flag
   let modelOverride: string | undefined
@@ -136,6 +139,58 @@ async function logoutFlow() {
     console.log('\n  Not logged in.\n')
   }
   process.exit(0)
+}
+
+async function upgradeFlow() {
+  const { readFileSync, existsSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { homedir } = await import('node:os')
+
+  const rcPath = join(homedir(), '.darcerc')
+  if (!existsSync(rcPath)) {
+    console.log('\n  Not logged in. Run `darce login` first.\n')
+    return
+  }
+
+  let config: Record<string, unknown>
+  try {
+    config = JSON.parse(readFileSync(rcPath, 'utf-8'))
+  } catch {
+    console.log('\n  Invalid config. Run `darce login` again.\n')
+    return
+  }
+
+  const apiKey = config.apiKey as string
+  const apiBase = (config.apiBase as string) || 'https://api.darce.dev'
+
+  console.log('\n  Creating checkout session...')
+
+  const res = await fetch(`${apiBase}/v1/checkout`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+  })
+
+  const data = await res.json() as { url?: string; error?: string }
+
+  if (!res.ok) {
+    if (data.error === 'Already on Pro') {
+      console.log('  You\'re already on Pro!\n')
+    } else {
+      console.log(`  Error: ${data.error || 'Failed to create checkout'}\n`)
+    }
+    return
+  }
+
+  console.log(`\n  Open this link to upgrade:\n`)
+  console.log(`  ${data.url}\n`)
+
+  // Try to open browser automatically
+  const { exec } = await import('node:child_process')
+  const openCmd = process.platform === 'win32' ? 'start' : process.platform === 'darwin' ? 'open' : 'xdg-open'
+  exec(`${openCmd} "${data.url}"`)
 }
 
 // === Main REPL ===
