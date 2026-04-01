@@ -8,6 +8,9 @@ import { useAppState } from './App.js'
 import { query } from '../core/query.js'
 import { buildSystemPrompt } from '../core/context.js'
 import { selectModel } from '../providers/router.js'
+import { isSlashCommand, executeCommand } from '../core/commands.js'
+import { saveSession } from '../state/sessions.js'
+import type { CommandContext } from '../core/commands.js'
 import type { SpinnerMode } from '../types.js'
 import type { Provider } from '../providers/provider.js'
 
@@ -17,6 +20,7 @@ type DisplayItem =
   | { type: 'assistant-text'; text: string }
   | { type: 'tool-call'; name: string; summary: string }
   | { type: 'tool-result'; name: string; result: string; isError?: boolean }
+  | { type: 'system'; text: string }
 
 type Props = {
   provider: Provider
@@ -61,6 +65,44 @@ export function REPL({ provider, initialPrompt }: Props) {
 
   const handleSubmit = useCallback(async (userInput: string) => {
     if (isProcessing) return
+
+    // Handle slash commands locally
+    if (isSlashCommand(userInput)) {
+      setHistory(prev => [userInput, ...prev])
+
+      const cmdContext: CommandContext = {
+        setModel: (model: string) => {
+          setState(prev => ({ ...prev, modelOverride: model, currentModel: model }))
+        },
+        currentModel: state.currentModel,
+        clearMessages: () => {
+          // For /compact, keep last 4 messages; for /clear, clear all
+          if (userInput.trim().startsWith('/compact')) {
+            messagesRef.current = messagesRef.current.slice(-4)
+          } else {
+            messagesRef.current = []
+          }
+        },
+        cwd: state.cwd,
+      }
+
+      const result = executeCommand(userInput, cmdContext)
+
+      if (result === '__QUIT__') {
+        exit()
+        return
+      }
+
+      if (userInput.trim().startsWith('/clear') || userInput.trim().startsWith('/c ') || userInput.trim() === '/c') {
+        setDisplayLog([])
+      }
+
+      if (result) {
+        setDisplayLog(prev => [...prev, { type: 'system', text: result }])
+      }
+      return
+    }
+
     setIsProcessing(true)
     setHistory(prev => [userInput, ...prev])
 
@@ -173,6 +215,10 @@ export function REPL({ provider, initialPrompt }: Props) {
       setStreamingText(null)
       abortRef.current = null
       setIsProcessing(false)
+      // Persist session after each query completes
+      if (messagesRef.current.length > 0) {
+        saveSession(state.sessionId, messagesRef.current, state.cwd)
+      }
     }
   }, [state, provider, isProcessing])
 
@@ -228,7 +274,7 @@ export function REPL({ provider, initialPrompt }: Props) {
       <Prompt onSubmit={handleSubmit} isLoading={isLoading} history={history} />
 
       {/* Status bar */}
-      <StatusBar model={state.currentModel} cwd={state.cwd} />
+      <StatusBar model={state.currentModel} cwd={state.cwd} messages={messagesRef.current} />
     </Box>
   )
 }
@@ -250,13 +296,16 @@ function DisplayItemView({ item }: { item: DisplayItem }) {
           <Markdown text={item.text} />
         </Box>
       )
-    case 'tool-call':
+    case 'tool-call': {
+      const safe = ['Read', 'Glob', 'Grep', 'WebFetch'].includes(item.name)
       return (
         <Box marginLeft={1}>
+          <Text color={safe ? 'gray' : 'yellow'} bold>{safe ? '○' : '●'} </Text>
           <Text color="cyan" bold>{item.name} </Text>
           <Text dimColor>{item.summary}</Text>
         </Box>
       )
+    }
     case 'tool-result': {
       const lines = item.result.split('\n')
       const preview = lines.length > 10
@@ -266,13 +315,19 @@ function DisplayItemView({ item }: { item: DisplayItem }) {
       return (
         <Box flexDirection="column" marginLeft={1} marginBottom={1}>
           {item.isError ? (
-            <Text color="red">{short}</Text>
+            <Text color="yellow">↻ {item.name} failed — model will retry</Text>
           ) : (
             <Text dimColor>{short}</Text>
           )}
         </Box>
       )
     }
+    case 'system':
+      return (
+        <Box marginBottom={1}>
+          <Text dimColor>{item.text}</Text>
+        </Box>
+      )
   }
 }
 

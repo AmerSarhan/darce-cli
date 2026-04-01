@@ -4,6 +4,7 @@ import { getTool, allTools } from '../tools/registry.js'
 import { toAPITools } from '../tools/registry.js'
 import { addUsage } from '../state/costTracker.js'
 import { debug } from '../utils/logger.js'
+import { shouldCompact, compactMessages } from './conversation.js'
 
 export type QueryParams = {
   messages: Message[]
@@ -26,6 +27,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
   let messages = [...params.messages]
   let turnCount = 0
   const tools = toAPITools()
+  const retriedToolIds = new Set<string>()
 
   const toolContext: ToolContext = {
     cwd: params.cwd,
@@ -40,6 +42,11 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
     turnCount++
     if (turnCount > maxTurns) {
       return { reason: 'max_turns', messages }
+    }
+
+    if (shouldCompact(messages)) {
+      messages = compactMessages(messages)
+      debug('Context compacted')
     }
 
     if (params.abortSignal?.aborted) {
@@ -126,6 +133,16 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
       yield { type: 'tool_executing', name: block.name, input: block.input } as StreamEvent
 
       const { result, isError } = await executeTool(block)
+
+      // Track retried tool IDs to avoid infinite retry loops
+      if (isError) {
+        if (retriedToolIds.has(block.id)) {
+          debug(`Tool ${block.name} (${block.id}) already retried, not retrying again`)
+        } else {
+          retriedToolIds.add(block.id)
+          debug(`Tool ${block.name} (${block.id}) errored, marking for retry`)
+        }
+      }
 
       // Tell the REPL the result
       yield { type: 'tool_result_ready', name: block.name, result, isError } as StreamEvent

@@ -16,6 +16,7 @@ if (args.includes('--help') || args.includes('-h')) {
     darce --model <id>              Override model
     darce login                     Sign in / create account
     darce logout                    Remove saved credentials
+    darce --resume, -r              Resume last session
     darce --version                 Print version
     darce --help                    Show this help
 
@@ -43,8 +44,16 @@ if (args[0] === 'login') {
     args.splice(modelIndex, 2)
   }
 
+  const resumeSession = args.includes('--resume') || args.includes('-r')
+  if (resumeSession) {
+    const idx = args.indexOf('--resume')
+    if (idx !== -1) args.splice(idx, 1)
+    const idx2 = args.indexOf('-r')
+    if (idx2 !== -1) args.splice(idx2, 1)
+  }
+
   const initialPrompt = args.join(' ').trim() || undefined
-  main(modelOverride, initialPrompt).catch(err => {
+  main(modelOverride, initialPrompt, resumeSession).catch(err => {
     console.error('Fatal error:', err.message)
     process.exit(1)
   })
@@ -130,7 +139,7 @@ async function logoutFlow() {
 }
 
 // === Main REPL ===
-async function main(modelOverride?: string, initialPrompt?: string) {
+async function main(modelOverride?: string, initialPrompt?: string, resumeSession?: boolean) {
   const { loadConfig } = await import('../config/config.js')
   const config = loadConfig()
 
@@ -150,14 +159,29 @@ async function main(modelOverride?: string, initialPrompt?: string) {
   const { App } = await import('../ui/App.js')
   const { REPL } = await import('../ui/REPL.js')
   const { randomUUID } = await import('node:crypto')
+  const { saveSession, loadLatestSession } = await import('../state/sessions.js')
+
+  let restoredMessages: any[] = []
+  let sessionId: string = randomUUID()
+
+  if (resumeSession) {
+    const restored = loadLatestSession(process.cwd())
+    if (restored) {
+      restoredMessages = restored.messages
+      sessionId = restored.sessionId
+      console.log(`  Resuming session ${sessionId.slice(0, 8)}... (${restoredMessages.length} messages)\n`)
+    } else {
+      console.log('  No previous session found for this directory.\n')
+    }
+  }
 
   const initialState = {
     config,
-    messages: [],
+    messages: restoredMessages,
     streamingText: null,
     spinnerMode: 'idle' as const,
     currentModel: modelOverride || config.router.default,
-    sessionId: randomUUID(),
+    sessionId,
     cwd: process.cwd(),
     readFiles: new Set<string>(),
     modelOverride: modelOverride || null,

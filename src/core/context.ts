@@ -8,7 +8,12 @@ function getGitContext(cwd: string): string | null {
     const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf-8', timeout: 5000 }).trim()
     const status = execSync('git status --short', { cwd, encoding: 'utf-8', timeout: 5000 }).trim()
     const log = execSync('git log --oneline -5', { cwd, encoding: 'utf-8', timeout: 5000 }).trim()
-    return `Branch: ${branch}\nStatus:\n${status || '(clean)'}\nRecent commits:\n${log}`
+    const diff = execSync('git diff --stat', { cwd, encoding: 'utf-8', timeout: 5000 }).trim()
+    let result = `Branch: ${branch}\nStatus:\n${status || '(clean)'}\nRecent commits:\n${log}`
+    if (diff) {
+      result += `\nChanged files:\n${diff}`
+    }
+    return result
   } catch {
     return null
   }

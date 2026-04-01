@@ -4,7 +4,10 @@
       "Bash(find /d/downloads/src/src -maxdepth 2 -name setup.ts -o -name *.ts -path */constants/* -o -name *.ts -path */hooks/* -o -name *.ts -path */coordinator/* -o -name *.ts -path */schemas/*)",
       "Bash(npm init:*)",
       "Bash(npm install:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "WebSearch",
+      "Bash(grep -r \"useBlink\\\\|useTheme\\\\|Box\\\\|Text\" /d/downloads/src/src/components/*.tsx)",
+      "Bash(npx tsup:*)"
     ]
   }
 }
