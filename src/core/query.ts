@@ -119,20 +119,19 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
       }
     }
 
-    // Run concurrent tools in parallel
-    const concurrentResults = await Promise.all(concurrent.map(executeTool))
+    // Execute all tools and yield live events
+    const allBlocks = [...concurrent, ...sequential]
+    for (const block of allBlocks) {
+      // Tell the REPL which tool is running
+      yield { type: 'tool_executing', name: block.name, input: block.input } as StreamEvent
 
-    // Run sequential tools one by one
-    const sequentialResults: typeof concurrentResults = []
-    for (const block of sequential) {
-      yield { type: 'request_start' } as StreamEvent
-      sequentialResults.push(await executeTool(block))
-    }
+      const { result, isError } = await executeTool(block)
 
-    // Build tool result messages and yield them
-    const allResults = [...concurrentResults, ...sequentialResults]
-    for (const { block, result, isError } of allResults) {
-      const toolResultMessage: Message = {
+      // Tell the REPL the result
+      yield { type: 'tool_result_ready', name: block.name, result, isError } as StreamEvent
+
+      // Add to message history for the model
+      messages.push({
         role: 'user',
         content: [{
           type: 'tool_result',
@@ -140,13 +139,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
           content: result,
           is_error: isError,
         }],
-      }
-      messages.push(toolResultMessage)
-
-      yield {
-        type: 'text_delta',
-        text: '',  // Signal that tool completed (REPL can update spinner)
-      } as StreamEvent
+      })
     }
 
     // Loop continues — model will see tool results

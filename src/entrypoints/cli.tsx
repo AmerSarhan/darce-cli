@@ -2,7 +2,7 @@
 const args = process.argv.slice(2)
 
 if (args.includes('--version') || args.includes('-v')) {
-  console.log('0.2.0')
+  console.log('0.2.2')
   process.exit(0)
 }
 

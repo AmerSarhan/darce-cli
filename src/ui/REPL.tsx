@@ -1,16 +1,22 @@
 import React, { useState, useCallback, useRef } from 'react'
 import { Box, Text, useInput, useApp } from 'ink'
-import { Messages } from './Messages.js'
 import { Prompt } from './Prompt.js'
-import { Spinner } from './Spinner.js'
 import { StatusBar } from './StatusBar.js'
 import { ModelPicker } from './ModelPicker.js'
+import { Markdown } from './Markdown.js'
 import { useAppState } from './App.js'
 import { query } from '../core/query.js'
 import { buildSystemPrompt } from '../core/context.js'
 import { selectModel } from '../providers/router.js'
-import type { Message as MessageType, SpinnerMode } from '../types.js'
+import type { SpinnerMode } from '../types.js'
 import type { Provider } from '../providers/provider.js'
+
+// Each item in the display log
+type DisplayItem =
+  | { type: 'user'; text: string }
+  | { type: 'assistant-text'; text: string }
+  | { type: 'tool-call'; name: string; summary: string }
+  | { type: 'tool-result'; name: string; result: string; isError?: boolean }
 
 type Props = {
   provider: Provider
@@ -21,19 +27,20 @@ export function REPL({ provider, initialPrompt }: Props) {
   const { state, setState } = useAppState()
   const { exit } = useApp()
 
-  const [messages, setMessages] = useState<MessageType[]>([])
+  const [displayLog, setDisplayLog] = useState<DisplayItem[]>([])
   const [streamingText, setStreamingText] = useState<string | null>(null)
   const [spinnerMode, setSpinnerMode] = useState<SpinnerMode>('idle')
+  const [spinnerLabel, setSpinnerLabel] = useState('')
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [history, setHistory] = useState<string[]>([])
   const readFilesRef = useRef(new Set<string>())
   const abortRef = useRef<AbortController | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
+  const messagesRef = useRef<any[]>([])
   const processedInitialPrompt = useRef(false)
 
   const isLoading = spinnerMode !== 'idle'
 
-  // Handle Ctrl+C and Ctrl+M
   useInput((ch, key) => {
     if (key.ctrl && ch === 'c') {
       if (abortRef.current) {
@@ -49,30 +56,34 @@ export function REPL({ provider, initialPrompt }: Props) {
     }
     if (key.ctrl && ch === 'm' && !isLoading) {
       setShowModelPicker(true)
-      return
     }
   })
 
   const handleSubmit = useCallback(async (userInput: string) => {
     if (isProcessing) return
-
     setIsProcessing(true)
     setHistory(prev => [userInput, ...prev])
 
-    const userMessage: MessageType = { role: 'user', content: userInput }
-    const newMessages = [...messages, userMessage]
-    setMessages(newMessages)
+    // Add user message to display
+    setDisplayLog(prev => [...prev, { type: 'user', text: userInput }])
+
+    const userMessage = { role: 'user' as const, content: userInput }
+    messagesRef.current = [...messagesRef.current, userMessage]
+
     setSpinnerMode('requesting')
+    setSpinnerLabel('Thinking')
 
     const abortController = new AbortController()
     abortRef.current = abortController
 
-    const model = state.modelOverride || selectModel(newMessages, state.config.router)
+    const model = state.modelOverride || selectModel(messagesRef.current, state.config.router)
     setState(prev => ({ ...prev, currentModel: model }))
+
+    let currentAssistantText = ''
 
     try {
       const gen = query({
-        messages: newMessages,
+        messages: messagesRef.current,
         model,
         provider,
         cwd: state.cwd,
@@ -88,47 +99,83 @@ export function REPL({ provider, initialPrompt }: Props) {
 
         switch (event.type) {
           case 'request_start':
-            setSpinnerMode('requesting')
-            break
-          case 'text_delta':
-            setStreamingText(prev => (prev ?? '') + event.text)
-            setSpinnerMode('responding')
-            break
-          case 'tool_use_start':
-            setSpinnerMode('tool-use')
-            break
-          case 'tool_use_end':
-            setSpinnerMode('tool-use')
-            break
-          case 'message_complete':
+            // New turn starting (after tool results sent back)
+            currentAssistantText = ''
             setStreamingText(null)
-            // Don't add to messages here — query loop manages the full array
-            // and we set it from result.value.messages at the end
+            setSpinnerMode('requesting')
+            setSpinnerLabel('Thinking')
             break
+
+          case 'text_delta':
+            currentAssistantText += event.text
+            // Show only complete lines
+            const visible = currentAssistantText.substring(0, currentAssistantText.lastIndexOf('\n') + 1) || null
+            setStreamingText(visible)
+            setSpinnerMode('responding')
+            setSpinnerLabel('')
+            break
+
+          case 'tool_use_start':
+            setSpinnerMode('tool-input')
+            setSpinnerLabel(`${event.name}`)
+            break
+
+          case 'message_complete':
+            // Flush any remaining streaming text as a display item
+            if (currentAssistantText.trim()) {
+              setDisplayLog(prev => [...prev, { type: 'assistant-text', text: currentAssistantText }])
+            }
+            setStreamingText(null)
+            currentAssistantText = ''
+            break
+
+          case 'tool_executing':
+            setSpinnerMode('tool-use')
+            setSpinnerLabel(`${event.name} ${toolSummary(event.name, event.input)}`)
+            // Show tool call in display
+            setDisplayLog(prev => [...prev, {
+              type: 'tool-call',
+              name: event.name,
+              summary: toolSummary(event.name, event.input),
+            }])
+            break
+
+          case 'tool_result_ready':
+            // Show result
+            setDisplayLog(prev => [...prev, {
+              type: 'tool-result',
+              name: event.name,
+              result: event.result,
+              isError: event.isError,
+            }])
+            setSpinnerMode('requesting')
+            setSpinnerLabel('Thinking')
+            break
+
           case 'error':
             setStreamingText(null)
-            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${event.error}` }])
+            setDisplayLog(prev => [...prev, { type: 'assistant-text', text: `Error: ${event.error}` }])
             break
         }
 
         result = await gen.next()
       }
 
-      // Query finished — update messages with final state
+      // Update messages ref with final state
       if (result.value) {
-        setMessages(result.value.messages)
+        messagesRef.current = result.value.messages
       }
     } catch (err: any) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
+      setDisplayLog(prev => [...prev, { type: 'assistant-text', text: `Error: ${err.message}` }])
     } finally {
       setSpinnerMode('idle')
+      setSpinnerLabel('')
       setStreamingText(null)
       abortRef.current = null
       setIsProcessing(false)
     }
-  }, [messages, state, provider, isProcessing])
+  }, [state, provider, isProcessing])
 
-  // Handle initial prompt
   React.useEffect(() => {
     if (initialPrompt && !processedInitialPrompt.current) {
       processedInitialPrompt.current = true
@@ -145,19 +192,30 @@ export function REPL({ provider, initialPrompt }: Props) {
     <Box flexDirection="column">
       {/* Header */}
       <Box marginBottom={1}>
-        <Text bold color="white">╭ </Text>
-        <Text bold color="cyan">Darce</Text>
-        <Text dimColor> v0.1.0</Text>
-        <Text dimColor> ({(state.currentModel.split('/').pop() || state.currentModel)})</Text>
+        <Text bold color="cyan">{'> '}</Text>
+        <Text bold>Darce</Text>
+        <Text dimColor> v0.2.2 </Text>
+        <Text dimColor>({state.currentModel.split('/').pop() || state.currentModel})</Text>
       </Box>
 
-      {/* Messages + streaming */}
-      <Messages messages={messages} streamingText={streamingText} />
+      {/* Display log — everything that happened */}
+      {displayLog.map((item, i) => (
+        <DisplayItemView key={i} item={item} />
+      ))}
+
+      {/* Streaming text preview */}
+      {streamingText && (
+        <Box marginBottom={1} marginLeft={0}>
+          <Markdown text={streamingText} />
+        </Box>
+      )}
 
       {/* Spinner */}
-      <Spinner mode={spinnerMode} />
+      {spinnerMode !== 'idle' && spinnerMode !== 'responding' && (
+        <SpinnerView mode={spinnerMode} label={spinnerLabel} />
+      )}
 
-      {/* Model picker overlay */}
+      {/* Model picker */}
       {showModelPicker && (
         <ModelPicker
           currentModel={state.currentModel}
@@ -173,4 +231,82 @@ export function REPL({ provider, initialPrompt }: Props) {
       <StatusBar model={state.currentModel} cwd={state.cwd} />
     </Box>
   )
+}
+
+// === Display Items ===
+
+function DisplayItemView({ item }: { item: DisplayItem }) {
+  switch (item.type) {
+    case 'user':
+      return (
+        <Box marginBottom={1}>
+          <Text bold color="magenta">{'> '}</Text>
+          <Text bold>{item.text}</Text>
+        </Box>
+      )
+    case 'assistant-text':
+      return (
+        <Box marginBottom={1}>
+          <Markdown text={item.text} />
+        </Box>
+      )
+    case 'tool-call':
+      return (
+        <Box marginLeft={1}>
+          <Text color="cyan" bold>{item.name} </Text>
+          <Text dimColor>{item.summary}</Text>
+        </Box>
+      )
+    case 'tool-result': {
+      const lines = item.result.split('\n')
+      const preview = lines.length > 10
+        ? [...lines.slice(0, 8), `  ... ${lines.length - 8} more lines`].join('\n')
+        : item.result
+      const short = preview.length > 1000 ? preview.slice(0, 1000) + '...' : preview
+      return (
+        <Box flexDirection="column" marginLeft={1} marginBottom={1}>
+          {item.isError ? (
+            <Text color="red">{short}</Text>
+          ) : (
+            <Text dimColor>{short}</Text>
+          )}
+        </Box>
+      )
+    }
+  }
+}
+
+// === Spinner ===
+
+const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+
+function SpinnerView({ mode, label }: { mode: SpinnerMode; label: string }) {
+  const [frame, setFrame] = React.useState(0)
+
+  React.useEffect(() => {
+    const timer = setInterval(() => setFrame(f => (f + 1) % FRAMES.length), 80)
+    return () => clearInterval(timer)
+  }, [])
+
+  return (
+    <Box>
+      <Text color="cyan">{FRAMES[frame]} </Text>
+      <Text dimColor>{label || mode}</Text>
+    </Box>
+  )
+}
+
+// === Tool Summary (Claude Code style — show the key info) ===
+
+function toolSummary(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case 'Bash': return String(input.description || input.command || '').slice(0, 80)
+    case 'Read': return String(input.file_path || '')
+    case 'Write': return String(input.file_path || '')
+    case 'Edit': return String(input.file_path || '')
+    case 'Glob': return String(input.pattern || '')
+    case 'Grep': return `${input.pattern || ''}${input.path ? ` in ${input.path}` : ''}`
+    case 'WebFetch': return String(input.url || '')
+    default: return ''
+  }
 }

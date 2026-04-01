@@ -39,6 +39,8 @@ export type StreamEvent =
   | { type: 'tool_use_delta'; id: string; json: string }
   | { type: 'tool_use_end'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'message_complete'; message: Message; usage: TokenUsage }
+  | { type: 'tool_executing'; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result_ready'; name: string; result: string; isError?: boolean }
   | { type: 'error'; error: string }
 
 export type SpinnerMode = 'idle' | 'requesting' | 'thinking' | 'responding' | 'tool-input' | 'tool-use'
