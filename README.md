@@ -229,6 +229,8 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 | `/rewind` | Scrub through every change and rewind files + conversation (also Esc twice) |
 | `/derby [--models a,b,c] <task>` | Race models on a task in separate worktrees and apply the best |
 | `/swarm <task>` | Split a task into parallel threads, each in its own worktree, then merge them all |
+| `/resume` | Pick any past conversation (this folder or all) and continue it |
+| `/debug` | Timing log for this session: requests, first reply, tools, waits |
 | `/threads [n]` | List this session's threads, or show one thread's steps and report |
 | `/critic on\|off [model]` | Second-opinion review of every edit by another vendor's model |
 | `/security [changes]` | Security review of the project or your uncommitted changes |

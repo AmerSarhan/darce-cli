@@ -135,6 +135,12 @@ const COMMANDS: SlashCommand[] = [
     execute: (args) => `__SWARM__:${args}`,
   },
   {
+    name: 'resume',
+    aliases: ['sessions', 'history'],
+    description: 'Pick a past conversation and continue it',
+    execute: () => `__RESUME__:`,
+  },
+  {
     name: 'debug',
     description: 'Show this session\'s timing log (requests, first reply, tools, waits)',
     execute: () => `__DEBUG__:`,

@@ -65,6 +65,8 @@ import type { SpawnRequest } from '../types.js'
 import { ThreadsPanel } from './ThreadsPanel.js'
 import { planSwarm, laneNote, type SwarmPart } from '../core/swarm.js'
 import { trace, recentTrace } from '../utils/logger.js'
+import { SessionPicker } from './SessionPicker.js'
+import { loadSession, type SessionSummary } from '../state/sessions.js'
 
 type Props = {
   provider: Provider
@@ -156,6 +158,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [tail, setTail] = useState('')
   const [queue, setQueue] = useState<string[]>([])
   const [showPicker, setShowPicker] = useState(false)
+  const [showSessions, setShowSessions] = useState(false)
   const [hint, setHint] = useState<string | undefined>()
   const [contextTokens, setContextTokens] = useState(() => estimateMessagesTokens(restored ?? []))
   const [pending, setPending] = useState<Pending | null>(null)
@@ -711,6 +714,21 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setBusy(false)
   }, [derby, commit])
 
+  const resumeSession = useCallback((summary: SessionSummary) => {
+    setShowSessions(false)
+    const loaded = loadSession(summary.sessionId)
+    if (!loaded) { commit({ kind: 'system', id: newId(), text: 'Couldn\'t open that conversation; its file may have been removed.' }); return }
+    // Continue in the same session file, so the conversation keeps growing in one place
+    messagesRef.current = loaded.messages
+    setState(prev => ({ ...prev, sessionId: loaded.sessionId }))
+    commit({ kind: 'system', id: newId(), text: `── Resuming "${summary.title}" ──` })
+    for (const item of itemsFromMessages(loaded.messages)) commit(item)
+    const elsewhere = loaded.cwd && loaded.cwd !== state.cwd
+    commit({ kind: 'system', id: newId(), text: `Resumed ${loaded.messages.length} messages.${elsewhere ? ` This conversation started in ${loaded.cwd}; Darce is working in ${state.cwd}, so file paths may differ.` : ''} Carry on where you left off.` })
+    setContextTokens(estimateMessagesTokens(loaded.messages))
+    trace('resume', { messages: loaded.messages.length, elsewhere: !!elsewhere })
+  }, [commit, setState, state.cwd])
+
   const handleCommand = useCallback((text: string) => {
     const ctx: CommandContext = {
       setModel: (model: string) => setState(prev => ({ ...prev, modelOverride: model, currentModel: model })),
@@ -884,6 +902,11 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     }
     if (result?.startsWith('__DERBY__:')) { void startDerby(result.slice(10)); return }
     if (result?.startsWith('__SWARM__:')) { void startSwarm(result.slice(10)); return }
+    if (result?.startsWith('__RESUME__:')) {
+      if (busy) { flashHint('Wait for Darce to finish (or Esc), then /resume.'); return }
+      setShowSessions(true)
+      return
+    }
     if (result?.startsWith('__DEBUG__:')) {
       commit({ kind: 'system', id: newId(), text: `Timing log for this session (newest last). Full log: ~/.darce/logs/trace.log\n\n${recentTrace(40)}` })
       return
@@ -925,7 +948,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (/^\/compact\b/.test(text)) return
     commit({ kind: 'user', id: newId(), text })
     if (result) commit({ kind: 'system', id: newId(), text: result })
-  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, state.config.suggestModel, setState, exit, clearScreen, commit, openTape, startDerby, startSwarm, criticOn, learnOn, suggestOn, runQuery])
+  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, state.config.suggestModel, setState, exit, clearScreen, commit, openTape, startDerby, startSwarm, busy, criticOn, learnOn, suggestOn, runQuery])
 
   // Run queued messages one after another
   useEffect(() => {
@@ -1128,7 +1151,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         dispatch(intent.action)
         return
     }
-  }, { isActive: !showPicker })
+  }, { isActive: !showPicker && !showSessions })
 
   usePaste(text => {
     // Dragging image files into the terminal pastes their paths — turn them into attachments
@@ -1144,7 +1167,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       return
     }
     dispatch({ type: 'insert', text })
-  }, { isActive: !showPicker && !pending && !tape && !derby })
+  }, { isActive: !showPicker && !showSessions && !pending && !tape && !derby })
 
   const handleModelSelect = useCallback((model: string) => {
     setState(prev => ({ ...prev, modelOverride: model, currentModel: model }))
@@ -1197,7 +1220,16 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           />
         )}
 
-        <Prompt editor={editor} busy={busy} dimmed={showPicker || !!pending || !!tape || !!derby} suggestion={suggestion} />
+        {showSessions && (
+          <SessionPicker
+            cwd={state.cwd}
+            currentSessionId={state.sessionId}
+            onSelect={resumeSession}
+            onClose={() => setShowSessions(false)}
+          />
+        )}
+
+        <Prompt editor={editor} busy={busy} dimmed={showPicker || showSessions || !!pending || !!tape || !!derby} suggestion={suggestion} />
         {attachments.filter(a => editor.text.includes(`[Image #${a.n}]`)).map(a => (
           <Text key={a.n} color={t.faint}>
             {'  '}<Text color={t.accent}>▣</Text> Image #{a.n}  {a.name}{a.width ? `  ${a.width}×${a.height}` : ''}  {Math.round(a.bytes / 1024)} KB

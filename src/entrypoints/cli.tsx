@@ -19,7 +19,7 @@ if (args.includes('--help') || args.includes('-h')) {
     darce login                     Sign in with your browser (or create an account)
     darce upgrade                   Upgrade to Builder or Power
     darce logout                    Remove saved credentials
-    darce --resume, -r              Resume last session
+    darce --resume, -r              Resume the last session here (/resume picks any past one)
     darce -p "explain src/app.ts"   Print the answer and exit (for scripts and CI)
     darce --mode plan               auto (default), ask, plan (read-only) or full
     darce --version                 Print version
