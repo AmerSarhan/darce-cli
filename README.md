@@ -49,7 +49,7 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 
 - **Any model** — 300+ tool-capable models via OpenRouter: Claude, GPT, Gemini, Grok, DeepSeek, Kimi, GLM, Qwen. Switch mid-conversation.
 - **Always current** — the model list is fetched live, so new models show up the day they launch.
-- **Tiny** — 19 kB package, installs in seconds, starts instantly.
+- **Lightweight** — a ~70 kB package that installs in seconds and starts instantly.
 - **Free tier** — start without a credit card or an API key.
 - **Open source** — MIT licensed.
 
