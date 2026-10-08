@@ -53,6 +53,12 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 - **Free tier** — start without a credit card or an API key.
 - **Open source** — MIT licensed.
 
+## What's New in 0.10.0
+
+- **Images and screenshots.** Press Ctrl+V to paste a screenshot from your clipboard, or drag image files into the terminal. They show up as `[Image #1]` and go to the model with your message. If your current model can't see images, Darce hands that message to a fast vision model automatically (`visionModel` in `~/.darcerc` to choose).
+- **Darce predicts your next step.** After each task, a small fast model suggests what you'll likely ask next as ghost text in the prompt. Tab or → accepts it. On by default for paid plans; `/suggest on|off` to change.
+- **Cleaner answers.** A new terminal markdown renderer: bold, code and links render properly everywhere (including inside lists and tables), long bullets wrap with a hanging indent, code blocks are highlighted, links are clickable.
+
 ## What's New in 0.9.0
 
 - **A proper welcome.** The DARCE wordmark sweeps in with an ember gradient, then a welcome card shows your model, approval mode, project, account, plan and requests left, plus the shortcuts worth knowing.
@@ -143,7 +149,8 @@ Requires Node.js 22 or newer. Already installed? Update with `npm install -g dar
 /diff     Review all changes     Ctrl+O         Full output of last step
 /rewind   Scrub & rewind         Esc Esc        Open the rewind tape
 /derby    Race models            Shift+↑/↓      Shift to a smarter/cheaper model
-/critic   Second opinion
+/critic   Second opinion         Ctrl+V         Paste a screenshot
+/suggest  Next-step predictions  Ctrl+R         Search prompt history
 ```
 
 - **7 tools** — Read, Write, Edit, Bash, Glob, Grep, WebFetch
@@ -208,6 +215,7 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 | `/critic on\|off [model]` | Second-opinion review of every edit by another vendor's model |
 | `/security [changes]` | Security review of the project or your uncommitted changes |
 | `/learn on\|off` | Darce explains the concepts behind each change |
+| `/suggest on\|off` | Predict your next prompt after each task (Tab accepts) |
 | `/skills` | List available skills |
 | `/memory [forget <text>]` | What Darce remembers about you and this project |
 | `/login`, `/account`, `/logout` | Browser sign-in, plan and usage, switch accounts |
@@ -297,7 +305,7 @@ git clone https://github.com/AmerSarhan/darce-cli.git
 cd darce-cli
 npm install
 npm run dev           # Run from source
-npm test              # 179 tests
+npm test              # 184 tests
 npm run build         # Build for production
 ```
 

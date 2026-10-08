@@ -23,7 +23,14 @@ export type ToolResultContent = {
   is_error?: boolean
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent
+export type ImageContent = {
+  type: 'image'
+  mediaType: string // image/png, image/jpeg, …
+  data: string // base64
+  name?: string
+}
+
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | ImageContent
 
 export type Message = {
   role: Role
@@ -102,6 +109,11 @@ export type DarceConfig = {
   /** Second-opinion reviews of every edit */
   critic?: boolean
   criticModel?: string
+  /** Used for messages with images when the current model can't see them */
+  visionModel?: string
+  /** Suggest the next prompt after each task (uses a small fast model) */
+  suggestions?: boolean
+  suggestModel?: string
   /** Models raced by /derby */
   derbyModels?: string[]
   /** Environment variables Bash may see even though they look like secrets */

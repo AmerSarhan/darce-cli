@@ -51,6 +51,10 @@ import { projectFiles } from './input/files.js'
 import { CompletionMenu, type MenuItem } from './CompletionMenu.js'
 import { listCommands } from '../core/commands.js'
 import { readFileSync, existsSync, statSync } from 'node:fs'
+import { clipboardImage, imagePathFrom, attachmentFromFile, toBase64, type Attachment } from './input/images.js'
+import { getModelProfile } from '../config/models.js'
+import { predictNext, DEFAULT_SUGGEST_MODEL } from '../core/suggest.js'
+import type { ImageContent } from '../types.js'
 import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
 import type { FileDiff } from '../utils/diff.js'
 
@@ -96,7 +100,7 @@ export function itemsFromMessages(messages: Message[]): TranscriptItem[] {
       continue
     }
     for (const b of m.content as ContentBlock[]) {
-      if (b.type === 'text' && b.text.trim()) items.push({ kind: 'assistant', id: newId(), text: b.text })
+      if (b.type === 'text' && b.text.trim()) items.push({ kind: m.role === 'user' ? 'user' : 'assistant', id: newId(), text: b.text })
       if (b.type === 'tool_use') {
         const r = results.get(b.id)
         items.push({ kind: 'tool', id: newId(), name: b.name, summary: toolSummary(b.name, b.input), result: r?.content ?? '', isError: r?.isError })
@@ -156,6 +160,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [menuIndex, setMenuIndex] = useState(0)
   const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
   const [search, setSearch] = useState<{ query: string; skip: number } | null>(null)
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [suggestion, setSuggestion] = useState<string | null>(null)
+  // null = decide from the plan once the account loads (on for paid plans, off for free)
+  const [suggestOn, setSuggestOn] = useState<boolean | null>(state.config.suggestions ?? null)
+  const suggestRef = useRef(suggestOn)
+  suggestRef.current = suggestOn
+  const imageCounter = useRef(0)
 
   useEffect(() => { projectFiles(state.cwd) }, [state.cwd])
 
@@ -214,6 +225,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         const plan = info.tier === 'free' ? 'Starter' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
         const left = typeof info.daily_limit === 'number' ? ` · ${Math.max(0, info.daily_limit - info.daily_requests).toLocaleString()} of ${info.daily_limit.toLocaleString()} requests left` : ' · unlimited'
         accountLine.current = `${info.email} · ${plan}${left}`
+        setSuggestOn(prev => (prev === null ? info.tier !== 'free' : prev))
       }
       clearTimeout(timer)
       finish()
@@ -253,6 +265,11 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     return parts.length ? `\n\nFiles the user attached:\n${parts.join('\n')}` : ''
   }, [state.cwd])
 
+  const addImage = useCallback((a: Attachment) => {
+    setAttachments(prev => [...prev, a])
+    dispatch({ type: 'insert', text: `[Image #${a.n}] ` })
+  }, [])
+
   const flashHint = useCallback((text: string, ms = 2000) => {
     setHint(text)
     if (hintTimer.current) clearTimeout(hintTimer.current)
@@ -265,20 +282,31 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setStaticKey(k => k + 1)
   }, [write, banner])
 
-  const runQuery = useCallback(async (text: string, attachments = '') => {
+  const runQuery = useCallback(async (text: string, attachments = '', images: ImageContent[] = []) => {
     setBusy(true)
+    setSuggestion(null)
     commit({ kind: 'user', id: newId(), text })
     // Notes about things the user did between turns (e.g. /undo) ride along with the next message
     const notes = notesRef.current.splice(0)
     if (learnRef.current) notes.push('learn mode is on: load the teach skill and follow it for this task')
-    const content = (notes.length ? `${notes.map(n => `[Note from Darce: ${n}]`).join('\n')}\n\n${text}` : text) + attachments
-    messagesRef.current = [...messagesRef.current, { role: 'user', content }]
+    const textContent = (notes.length ? `${notes.map(n => `[Note from Darce: ${n}]`).join('\n')}\n\n${text}` : text) + attachments
+    messagesRef.current = [...messagesRef.current, {
+      role: 'user',
+      content: images.length ? [{ type: 'text', text: textContent }, ...images] : textContent,
+    }]
 
     const controller = new AbortController()
     abortRef.current = controller
     setActivity({ label: 'Thinking', startedAt: Date.now() })
 
     if (!state.modelOverride) modelRef.current = selectModel(messagesRef.current, state.config.router)
+    // Images need a model that can see; borrow a fast vision model for this task if needed
+    const modelBeforeVision = modelRef.current
+    const profile = getModelProfile(modelRef.current)
+    if (images.length && profile && !profile.strengths.includes('vision')) {
+      modelRef.current = state.config.visionModel || 'google/gemini-3.8-flash'
+      commit({ kind: 'system', id: newId(), text: `${modelBeforeVision.split('/').pop()} can't see images, so ${modelRef.current.split('/').pop()} is handling this message.` })
+    }
     setState(prev => ({ ...prev, currentModel: modelRef.current }))
     const costBefore = getTotalCost()
     const tokensBefore = getTotalTokens()
@@ -460,6 +488,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       flush(true)
       commit({ kind: 'error', id: newId(), text: (err as Error).message })
     } finally {
+      if (modelRef.current !== modelBeforeVision && images.length) modelRef.current = modelBeforeVision
       const took = Date.now() - startedAt
       setTitle('darce')
       setProgress('off')
@@ -484,6 +513,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       setContextTokens(estimateMessagesTokens(messagesRef.current))
       if (messagesRef.current.length > 0) saveSession(state.sessionId, messagesRef.current, state.cwd)
       setBusy(false)
+      if (suggestRef.current && !controller.signal.aborted) {
+        const snapshot = messagesRef.current
+        void predictNext(provider, state.config.suggestModel || DEFAULT_SUGGEST_MODEL, snapshot).then(guess => {
+          // Only show it if nothing new happened in the meantime
+          if (guess && messagesRef.current === snapshot) setSuggestion(guess)
+        })
+      }
     }
   }, [state, provider, setState, commit])
 
@@ -694,6 +730,16 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         : `Load the security-review skill and do a security review of this project${target ? ` focusing on ${target}` : ''}. Report findings by severity with proof and fixes. Do not change any code.`)
       return
     }
+    if (result?.startsWith('__SUGGEST__:')) {
+      const arg = result.slice(12)
+      const on = arg === 'on' ? true : arg === 'off' ? false : !suggestOn
+      setSuggestOn(on)
+      if (!on) setSuggestion(null)
+      commit({ kind: 'system', id: newId(), text: on
+        ? `Next-step suggestions on: after each task, ${(state.config.suggestModel || DEFAULT_SUGGEST_MODEL).split('/').pop()} predicts what you'll ask next. Tab accepts. Each prediction is one small request.`
+        : 'Next-step suggestions off.' })
+      return
+    }
     if (result?.startsWith('__LEARN__:')) {
       const arg = result.slice(10)
       const on = arg === 'on' ? true : arg === 'off' ? false : !learnOn
@@ -739,7 +785,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (/^\/compact\b/.test(text)) return
     commit({ kind: 'user', id: newId(), text })
     if (result) commit({ kind: 'system', id: newId(), text: result })
-  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, setState, exit, clearScreen, commit, openTape, startDerby, criticOn, learnOn, runQuery])
+  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, state.config.suggestModel, setState, exit, clearScreen, commit, openTape, startDerby, criticOn, learnOn, suggestOn, runQuery])
 
   // Run queued messages one after another
   useEffect(() => {
@@ -829,6 +875,12 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       }
       return
     }
+    if (suggestion && !editor.text && (key.tab || key.rightArrow)) {
+      dispatch({ type: 'set', text: suggestion })
+      setSuggestion(null)
+      return
+    }
+    if (suggestion && input && !key.ctrl && !key.meta) setSuggestion(null)
     const intent = intentFor(input, key)
     switch (intent.kind) {
       case 'interrupt':
@@ -881,6 +933,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         flashHint(`Mode: ${MODE_INFO[next]}`, 3000)
         return
       }
+      case 'pasteImage':
+        void clipboardImage(imageCounter.current + 1).then(r => {
+          if ('error' in r) { flashHint(r.error, 3500); return }
+          imageCounter.current = r.n
+          addImage(r)
+        })
+        return
       case 'historySearch':
         if (editor.history.length) setSearch({ query: '', skip: 0 })
         return
@@ -914,7 +973,10 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           setQueue(q => [...q, text])
           return
         }
-        void runQuery(text, attachMentions(text))
+        const used = attachments.filter(a => text.includes(`[Image #${a.n}]`))
+        const images: ImageContent[] = used.map(a => ({ type: 'image', mediaType: a.mediaType, data: toBase64(a), name: a.name }))
+        setAttachments([])
+        void runQuery(text, attachMentions(text), images)
         return
       }
       case 'edit':
@@ -923,7 +985,21 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     }
   }, { isActive: !showPicker })
 
-  usePaste(text => dispatch({ type: 'insert', text }), { isActive: !showPicker && !pending && !tape && !derby })
+  usePaste(text => {
+    // Dragging image files into the terminal pastes their paths — turn them into attachments
+    const tokens = text.trim().match(/'[^']+'|"[^"]+"|(?:\\ |[^\s])+/g) ?? []
+    const paths = tokens.map(tok => imagePathFrom(tok, state.cwd))
+    if (tokens.length > 0 && paths.every(Boolean)) {
+      for (const p of paths) {
+        const a = attachmentFromFile(p!, imageCounter.current + 1)
+        if ('error' in a) { flashHint(a.error, 3500); continue }
+        imageCounter.current = a.n
+        addImage(a)
+      }
+      return
+    }
+    dispatch({ type: 'insert', text })
+  }, { isActive: !showPicker && !pending && !tape && !derby })
 
   const handleModelSelect = useCallback((model: string) => {
     setState(prev => ({ ...prev, modelOverride: model, currentModel: model }))
@@ -975,7 +1051,12 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           />
         )}
 
-        <Prompt editor={editor} busy={busy} dimmed={showPicker || !!pending || !!tape || !!derby} />
+        <Prompt editor={editor} busy={busy} dimmed={showPicker || !!pending || !!tape || !!derby} suggestion={suggestion} />
+        {attachments.filter(a => editor.text.includes(`[Image #${a.n}]`)).map(a => (
+          <Text key={a.n} color={t.faint}>
+            {'  '}<Text color={t.accent}>▣</Text> Image #{a.n}  {a.name}{a.width ? `  ${a.width}×${a.height}` : ''}  {Math.round(a.bytes / 1024)} KB
+          </Text>
+        ))}
         {search ? (
           <Text>
             <Text color={t.faint}>  history search </Text><Text color={t.accent}>{search.query || ' '}</Text>

@@ -48,11 +48,22 @@ function toOpenRouterMessages(messages: Message[]): Array<Record<string, unknown
       continue
     }
 
-    // Plain text blocks
+    // Text, optionally with images (OpenAI-compatible content parts)
     const textContent = blocks
       .filter(b => b.type === 'text')
       .map(b => (b as any).text)
       .join('')
+    const images = blocks.filter(b => b.type === 'image')
+    if (images.length > 0) {
+      result.push({
+        role: msg.role,
+        content: [
+          ...(textContent ? [{ type: 'text', text: textContent }] : []),
+          ...images.map(img => ({ type: 'image_url', image_url: { url: `data:${(img as any).mediaType};base64,${(img as any).data}` } })),
+        ],
+      })
+      continue
+    }
     result.push({ role: msg.role, content: textContent || '' })
   }
 

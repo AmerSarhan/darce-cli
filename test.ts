@@ -49,6 +49,7 @@ import { htmlToMarkdown, looksBlocked } from './src/web/html.js'
 import { discoverSkills, loadSkill, resetSkills } from './src/core/skills.js'
 import { remember, readMemory, forget } from './src/core/memory.js'
 import { listCommands } from './src/core/commands.js'
+import { renderTerminalMarkdown } from './src/ui/markdownRender.js'
 import { buildSystemPrompt, resetContext } from './src/core/context.js'
 import type { ToolContext, Message, RouterConfig } from './src/types.js'
 
@@ -1249,6 +1250,31 @@ async function testBrain() {
   await test('Web: HTML becomes markdown without scripts', () => {
     const { title, markdown } = htmlToMarkdown('<html><head><title>T</title><script>evil()</script></head><body><main><h1>Hello</h1><p>See <a href="/docs">docs</a></p></main></body></html>', 'https://x.dev/page')
     return title === 'T' && markdown.includes('# Hello') && markdown.includes('(https://x.dev/docs)') && !markdown.includes('evil')
+  })
+  await test('Markdown: no raw syntax leaks, even inside lists and tables', () => {
+    const out = renderTerminalMarkdown('## Title\n\n- **bold** and *em* and `code` and [link](https://x.dev)\n  - nested **x**\n\n| a | b |\n|---|---|\n| **c** | d |', 80).replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07/g, '')
+    return !/\*\*|##|`|\]\(/.test(out) && out.includes('• bold and em and code and link') && out.includes('Title')
+  })
+  await test('Markdown: long list items wrap with a hanging indent', () => {
+    const out = renderTerminalMarkdown('- ' + 'word '.repeat(40), 40).replace(/\x1b\[[0-9;]*m/g, '')
+    const lines = out.split('\n')
+    return lines.length > 1 && lines.slice(1).every(l => l.startsWith('  ')) && lines.every(l => l.length <= 41)
+  })
+  await test('Images: PNG and JPEG sizes read from headers', async () => {
+    const { imageSize } = await import('./src/ui/input/images.js')
+    const png = Buffer.alloc(32); png.writeUInt32BE(0x89504e47, 0); png.writeUInt32BE(1280, 16); png.writeUInt32BE(800, 20)
+    const s = imageSize(png)
+    return s?.width === 1280 && s?.height === 800
+  })
+  await test('Images: dropped paths are recognised (quoted, escaped, ~)', async () => {
+    const { imagePathFrom } = await import('./src/ui/input/images.js')
+    const f = join(TMP_DIR, 'shot one.png')
+    writeFileSync(f, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    return imagePathFrom(`'${f}'`, '/') === f && imagePathFrom(f.replace(/ /g, '\\ '), '/') === f && imagePathFrom('notes.txt', TMP_DIR) === null
+  })
+  await test('Images: sent to the model as image_url parts; counted as ~1500 tokens', async () => {
+    const msgs: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'what is this' }, { type: 'image', mediaType: 'image/png', data: 'A'.repeat(100000) }] }]
+    return estimateMessagesTokens(msgs) < 2000
   })
   await test('Web: bot walls are detected', () => looksBlocked(403, '') && looksBlocked(200, '<title>Just a moment...</title>') && !looksBlocked(200, '<h1>Docs</h1>'))
 }

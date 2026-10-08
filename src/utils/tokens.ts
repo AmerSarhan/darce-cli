@@ -9,7 +9,10 @@ export function estimateMessagesTokens(messages: Array<{ role: string; content: 
     if (typeof msg.content === 'string') {
       total += estimateTokens(msg.content)
     } else if (Array.isArray(msg.content)) {
-      total += estimateTokens(JSON.stringify(msg.content))
+      for (const block of msg.content as Array<Record<string, unknown>>) {
+        // An image costs roughly a fixed number of tokens, not its base64 length
+        total += block?.type === 'image' ? 1500 : estimateTokens(JSON.stringify(block))
+      }
     }
   }
   return total

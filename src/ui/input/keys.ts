@@ -12,6 +12,7 @@ export type InputIntent =
   | { kind: 'expand' }
   | { kind: 'gear'; dir: 1 | -1 }
   | { kind: 'historySearch' }
+  | { kind: 'pasteImage' }
   | { kind: 'none' }
 
 const edit = (action: EditorAction): InputIntent => ({ kind: 'edit', action })
@@ -44,6 +45,7 @@ export function intentFor(input: string, key: Key): InputIntent {
       case 'l': return { kind: 'clearScreen' }
       case 'o': return { kind: 'expand' }
       case 'r': return { kind: 'historySearch' }
+      case 'v': return { kind: 'pasteImage' }
       case 'p':
       case 'm': return { kind: 'modelPicker' }
     }
