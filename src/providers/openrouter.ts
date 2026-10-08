@@ -2,8 +2,15 @@ import { parseSSEFrames } from '../core/streaming.js'
 import { debug, trace } from '../utils/logger.js'
 import type { Message, StreamEvent, TokenUsage, ContentBlock } from '../types.js'
 import type { Provider, OpenRouterTool } from './provider.js'
+import { getModelProfile } from '../config/models.js'
 
-function toOpenRouterMessages(messages: Message[]): Array<Record<string, unknown>> {
+/** Unknown models are assumed to accept images (the request fails loudly if not). */
+function canSeeImages(model: string): boolean {
+  const profile = getModelProfile(model)
+  return !profile || profile.strengths.includes('vision')
+}
+
+function toOpenRouterMessages(messages: Message[], vision = true): Array<Record<string, unknown>> {
   const result: Array<Record<string, unknown>> = []
 
   for (const msg of messages) {
@@ -54,6 +61,12 @@ function toOpenRouterMessages(messages: Message[]): Array<Record<string, unknown
       .map(b => (b as any).text)
       .join('')
     const images = blocks.filter(b => b.type === 'image')
+    // A model that can't see images rejects any request containing one, even from earlier turns
+    if (images.length > 0 && !vision) {
+      const note = `[${images.length === 1 ? 'An image was' : `${images.length} images were`} shared here; the current model can't view images.]`
+      result.push({ role: msg.role, content: textContent ? `${textContent}\n${note}` : note })
+      continue
+    }
     if (images.length > 0) {
       result.push({
         role: msg.role,
@@ -128,7 +141,7 @@ export class OpenRouterProvider implements Provider {
 
     const body: Record<string, unknown> = {
       model,
-      messages: toOpenRouterMessages(messages),
+      messages: toOpenRouterMessages(messages, canSeeImages(model)),
       stream: true,
     }
     if (tools.length > 0) {

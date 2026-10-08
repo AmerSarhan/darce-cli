@@ -2,6 +2,10 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.12.6
+
+- Fixed: after sharing an image, the next message failed with "No endpoints found that support image input" when the main model can't see images.
+
 ## 0.12.5
 
 - **Try it without an account.** The first run offers 10 free requests with no sign-up; `darce signup` turns the trial into a free account and keeps your history.
