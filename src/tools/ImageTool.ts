@@ -13,7 +13,7 @@ const inputSchema = z.object({
   aspect_ratio: z.enum(RATIOS).optional().describe('Defaults to 1:1'),
   resolution: z.enum(['1K', '2K']).optional().describe('1K (default) is enough for UI assets; 2K for large hero images'),
   reference_images: z.array(z.string()).max(2).optional().describe('Paths of existing images in the project to edit or match in style'),
-  model: z.enum(['gpt-image', 'nano-banana', 'nano-banana-pro', 'seedream']).optional().describe('Leave unset for the plan default. gpt-image (OpenAI): best for UI assets, icons, logos and any text in the image, and the only one with transparent backgrounds. nano-banana-pro (Google): photorealism and complex scenes. nano-banana: good and cheaper. seedream: fast, cheapest drafts.'),
+  model: z.enum(['gpt-image', 'nano-banana', 'nano-banana-pro', 'seedream']).optional().describe('Leave unset for the plan default. gpt-image (OpenAI): best for UI assets, icons, logos and any text in the image, and the only one with transparent backgrounds. nano-banana-pro (Google): photorealism and complex scenes. nano-banana: good alternative. seedream: different style.'),
   quality: z.enum(['low', 'medium', 'high']).optional().describe('gpt-image only. medium (default) for most assets; high for final hero images; low for quick drafts'),
   transparent: z.boolean().optional().describe('Transparent background (gpt-image only): icons, logos, stickers'),
 })
@@ -29,7 +29,7 @@ function pngSize(buf: Buffer): string {
 
 export const ImageTool: ToolDef<typeof inputSchema, string> = {
   name: 'Image',
-  description: 'Generate an image and save it into the project: icons, logos, illustrations, hero images, textures, mockup assets, or an edit of an existing image (pass it in reference_images). Write a specific visual prompt, and quote any exact text that must appear. An image counts as 3 to 20 requests depending on model and quality, so only make the images the task needs, never decorative extras.',
+  description: 'Generate an image and save it into the project: icons, logos, illustrations, hero images, textures, mockup assets, or an edit of an existing image (pass it in reference_images). Write a specific visual prompt, and quote any exact text that must appear. An image counts as 2 requests by default (gpt-image, medium) and up to 22 for nano-banana-pro, so only make the images the task needs, never decorative extras.',
   inputSchema,
   isReadOnly: false,
   isConcurrencySafe: false,
