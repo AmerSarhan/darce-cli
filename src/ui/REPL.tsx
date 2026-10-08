@@ -37,6 +37,7 @@ import { DerbyBoard } from './DerbyBoard.js'
 import { Derby, defaultRacers } from '../core/derby.js'
 import { pickCritic, reviewEdit } from '../core/critic.js'
 import { DEFAULT_GEARS, gearIndex, shiftGear, priceNote } from '../config/gears.js'
+import { createCheckout, openInBrowser } from '../core/billing.js'
 import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
 import type { FileDiff } from '../utils/diff.js'
 
@@ -504,6 +505,21 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       return
     }
     if (result === '__REWIND__') { openTape(); return }
+    if (result?.startsWith('__UPGRADE__:')) {
+      const arg = result.slice(12)
+      const plan = arg === 'builder' || arg === 'power' ? arg : undefined
+      commit({ kind: 'user', id: newId(), text })
+      commit({ kind: 'system', id: newId(), text: 'Creating a secure Stripe checkout…' })
+      void createCheckout(state.config.apiKey, state.config.apiBase || undefined, plan).then(r => {
+        if ('url' in r) {
+          openInBrowser(r.url)
+          commit({ kind: 'system', id: newId(), text: `Opened checkout in your browser. If it didn't open:\n${r.url}` })
+        } else {
+          commit({ kind: r.alreadyPaid ? 'system' : 'error', id: newId(), text: r.alreadyPaid ? "You're already on a paid plan." : r.error })
+        }
+      })
+      return
+    }
     if (result?.startsWith('__DERBY__:')) { void startDerby(result.slice(10)); return }
     if (result?.startsWith('__CRITIC__:')) {
       const [arg, model] = result.slice(11).split(/\s+/)

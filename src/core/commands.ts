@@ -68,6 +68,11 @@ const COMMANDS: SlashCommand[] = [
     execute: () => '__DIFF__',
   },
   {
+    name: 'upgrade',
+    description: 'Upgrade your plan: /upgrade builder ($15/mo) or /upgrade power ($65/mo)',
+    execute: (args) => `__UPGRADE__:${args.trim().toLowerCase()}`,
+  },
+  {
     name: 'rewind',
     description: 'Scrub through every change and rewind files + conversation (or press Esc twice)',
     execute: () => '__REWIND__',
