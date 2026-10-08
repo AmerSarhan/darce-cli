@@ -3,7 +3,7 @@
   <img src="https://img.shields.io/npm/dw/darce-cli?style=flat-square&color=10b981" alt="downloads">
   <img src="https://img.shields.io/github/stars/AmerSarhan/darce-cli?style=flat-square&color=10b981" alt="stars">
   <img src="https://img.shields.io/github/license/AmerSarhan/darce-cli?style=flat-square" alt="license">
-  <a href="https://discord.gg/Js65REPY8"><img src="https://img.shields.io/badge/Discord-join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://discord.gg/u447rt6Xfq"><img src="https://img.shields.io/badge/Discord-join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
 </p>
 
 <h1 align="center">Darce</h1>
@@ -20,7 +20,7 @@
   <a href="#get-started">Get Started</a> &middot;
   <a href="https://cli.darce.dev/#pricing">Pricing</a> &middot;
   <a href="https://cli.darce.dev/dashboard">Dashboard</a> &middot;
-  <a href="https://discord.gg/Js65REPY8">Discord</a>
+  <a href="https://discord.gg/u447rt6Xfq">Discord</a>
 </p>
 
 ---
@@ -308,7 +308,7 @@ Darce looks in `.darce/skills/` and `.claude/skills/` (project), then `~/.darce/
 
 ## Community
 
-Questions, ideas, bugs, or something cool you built with Darce? Join us on **[Discord](https://discord.gg/Js65REPY8)**, or type `/community` inside Darce.
+Questions, ideas, bugs, or something cool you built with Darce? Join us on **[Discord](https://discord.gg/u447rt6Xfq)**, or type `/community` inside Darce.
 
 ## Contributing
 
