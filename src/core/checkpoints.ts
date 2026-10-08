@@ -16,6 +16,7 @@ export type Checkpoint = {
   n: number
   label: string
   at: number
+  toolUseId?: string // links the snapshot to the step that followed it (for rewind)
   commit?: string // git mode
   files?: Map<string, string | null> // fallback mode: path → previous content (null = did not exist)
 }
@@ -80,7 +81,7 @@ export class Checkpoints {
   }
 
   /** Take a snapshot before a change. `paths` is used outside git (Edit/Write targets). */
-  snapshot(label: string, paths: string[] = []): Checkpoint | null {
+  snapshot(label: string, paths: string[] = [], toolUseId?: string): Checkpoint | null {
     const n = ++this.counter
     if (this.root) {
       try {
@@ -91,7 +92,7 @@ export class Checkpoints {
           { GIT_AUTHOR_NAME: 'darce', GIT_AUTHOR_EMAIL: 'darce@localhost', GIT_COMMITTER_NAME: 'darce', GIT_COMMITTER_EMAIL: 'darce@localhost' },
         ).trim()
         this.git(['update-ref', `refs/darce/${this.sessionId}/${n}`, commit])
-        const cp: Checkpoint = { n, label, at: Date.now(), commit }
+        const cp: Checkpoint = { n, label, at: Date.now(), commit, toolUseId }
         this.stack.push(cp)
         return cp
       } catch {
@@ -108,7 +109,7 @@ export class Checkpoints {
         // unreadable — skip
       }
     }
-    const cp: Checkpoint = { n, label, at: Date.now(), files }
+    const cp: Checkpoint = { n, label, at: Date.now(), files, toolUseId }
     this.stack.push(cp)
     return cp
   }
@@ -184,7 +185,78 @@ export class Checkpoints {
     return { ok: true, label: cp.label, restored, removed }
   }
 
+  /** What step i changed: its snapshot vs the next one (or the current files for the last step). */
+  stepDiff(i: number): FileDiff[] | null {
+    const cp = this.stack[i]
+    if (!cp) return []
+    if (cp.files) {
+      return [...cp.files.entries()].map(([abs, before]) => {
+        let after = ''
+        try { after = readFileSync(abs, 'utf-8') } catch {}
+        return fileDiff(abs, before, after)
+      })
+    }
+    if (!this.root || !cp.commit) return null
+    const next = this.stack[i + 1]?.commit
+    return this.diffTrees(`${cp.commit}^{tree}`, next ? `${next}^{tree}` : this.writeTree())
+  }
+
+  private diffTrees(a: string, b: string): FileDiff[] {
+    const changes = this.git(['diff', '--name-status', '--no-renames', a, b]).split('\n').filter(Boolean)
+    return changes.map(line => {
+      const [status, ...rest] = line.split('\t')
+      const path = rest.join('\t')
+      const read = (tree: string) => { try { return this.git(['show', `${tree}:${path}`]) } catch { return null } }
+      return fileDiff(path, status === 'A' ? null : read(a), status === 'D' ? '' : read(b) ?? '')
+    })
+  }
+
+  /** Put the files back to how they were right before step i; steps i… are discarded. */
+  rewindTo(i: number): UndoResult {
+    const cp = this.stack[i]
+    if (!cp) return { ok: false, reason: 'That step no longer exists.' }
+    try {
+      let result: UndoResult
+      if (cp.commit) {
+        result = this.restoreGit(cp)
+        for (const later of this.stack.slice(i + 1)) {
+          try { this.git(['update-ref', '-d', `refs/darce/${this.sessionId}/${later.n}`]) } catch {}
+        }
+      } else {
+        // Fallback mode: unwind file backups newest-first
+        const restored = new Set<string>()
+        const removed = new Set<string>()
+        for (const step of this.stack.slice(i).reverse()) {
+          const r = this.restoreFiles(step)
+          if (r.ok) { r.restored.forEach(f => restored.add(f)); r.removed.forEach(f => removed.add(f)) }
+        }
+        result = { ok: true, label: cp.label, restored: [...restored], removed: [...removed] }
+      }
+      this.stack = this.stack.slice(0, i)
+      return result
+    } catch (err) {
+      return { ok: false, reason: `Could not rewind: ${(err as Error).message.split('\n')[0]}` }
+    }
+  }
+
   private baseline: string | null = null
+
+  get gitRoot(): string | null {
+    return this.root
+  }
+
+  /** A commit of the current working tree (tracked + untracked), not added to the undo stack. */
+  commitWorkingTree(message: string): string | null {
+    if (!this.root) return null
+    try {
+      const tree = this.writeTree()
+      return this.git(['commit-tree', tree, '-m', message], this.root, {
+        GIT_AUTHOR_NAME: 'darce', GIT_AUTHOR_EMAIL: 'darce@localhost', GIT_COMMITTER_NAME: 'darce', GIT_COMMITTER_EMAIL: 'darce@localhost',
+      }).trim()
+    } catch {
+      return null
+    }
+  }
 
   /** Record the state at session start so /diff can show everything Darce changed. */
   markBaseline() {
@@ -197,18 +269,7 @@ export class Checkpoints {
     if (!this.root) return null
     const base = this.baseline ?? (this.stack[0]?.commit ? `${this.stack[0].commit}^{tree}` : null)
     if (!base) return []
-    const current = this.writeTree()
-    const changes = this.git(['diff', '--name-status', '--no-renames', base, current]).split('\n').filter(Boolean)
-    const out: FileDiff[] = []
-    for (const line of changes) {
-      const [status, ...rest] = line.split('\t')
-      const path = rest.join('\t')
-      const read = (tree: string) => { try { return this.git(['show', `${tree}:${path}`]) } catch { return null } }
-      const before = status === 'A' ? null : read(base)
-      const after = status === 'D' ? '' : read(current) ?? ''
-      out.push(fileDiff(path, before, after))
-    }
-    return out
+    return this.diffTrees(base, this.writeTree())
   }
 
   /** Remove this session's refs (called on exit). Snapshots remain recoverable via reflog-free objects until git gc. */

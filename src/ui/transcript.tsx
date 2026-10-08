@@ -7,6 +7,7 @@ import { getTool } from '../tools/registry.js'
 import { DiffView } from './DiffView.js'
 import { link } from './termfx.js'
 import type { ToolDisplay } from '../types.js'
+import { Receipt, type ReceiptData } from './Receipt.js'
 
 // Everything that has happened in the session. Committed items are printed
 // once via <Static> and never re-rendered.
@@ -16,6 +17,8 @@ export type TranscriptItem =
   | { kind: 'assistant'; id: string; text: string }
   | { kind: 'tool'; id: string; name: string; summary: string; result: string; isError?: boolean; durationMs?: number; display?: ToolDisplay; approval?: string; path?: string }
   | { kind: 'expanded'; id: string; name: string; summary: string; result: string; display?: ToolDisplay }
+  | { kind: 'receipt'; id: string; data: ReceiptData }
+  | { kind: 'critic'; id: string; model: string; path: string; issue?: string }
   | { kind: 'system'; id: string; text: string }
   | { kind: 'error'; id: string; text: string }
 
@@ -55,7 +58,7 @@ function resultHeadline(item: Extract<TranscriptItem, { kind: 'tool' }>): string
   if (item.isError) return lines[0]?.replace(/^Error:\s*/i, '') ?? 'failed'
   if (item.display?.kind === 'diff') {
     const d = item.display
-    return d.created ? `created, ${d.added} lines` : `+${d.added} −${d.removed}`
+    return d.created ? `created, ${d.added} line${d.added === 1 ? '' : 's'}` : `+${d.added} −${d.removed}`
   }
   switch (item.name) {
     case 'Read': return `${Math.max(0, item.result.split('\n').length)} lines`
@@ -159,11 +162,21 @@ export function TranscriptItemView({ item }: { item: TranscriptItem }) {
       return (
         <Box flexDirection="column" marginLeft={1} marginBottom={1}>
           {item.display?.kind === 'diff'
-            ? <Text><Text bold>{item.summary}</Text><Text color={t.faint}>  {item.display.created ? `new file, ${item.display.added} lines` : `+${item.display.added} −${item.display.removed}`}</Text></Text>
+            ? <Text><Text bold>{item.summary}</Text><Text color={t.faint}>  {item.display.created ? `new file, ${item.display.added} line${item.display.added === 1 ? '' : 's'}` : `+${item.display.added} −${item.display.removed}`}</Text></Text>
             : <Text color={t.muted}>Full output of {item.name} {item.summary}</Text>}
           {item.display?.kind === 'diff'
             ? <DiffView diff={item.display} maxLines={Infinity} />
             : <Box marginLeft={2}><Text color={t.faint}>{item.result || '(no output)'}</Text></Box>}
+        </Box>
+      )
+    case 'receipt':
+      return <Receipt r={item.data} />
+    case 'critic':
+      return (
+        <Box marginLeft={3} marginBottom={item.issue ? 1 : 0}>
+          {item.issue
+            ? <Text><Text color={t.warning}>⚑ </Text><Text color={t.muted}>{item.model.split('/').pop()} on {item.path.split('/').pop()}: </Text><Text>{item.issue}</Text><Text color={t.faint}>  (Darce sees this with your next message)</Text></Text>
+            : <Text color={t.faint}>✓ {item.model.split('/').pop()} reviewed {item.path.split('/').pop()}: no issues</Text>}
         </Box>
       )
     case 'system':

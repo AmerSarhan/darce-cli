@@ -1,7 +1,8 @@
 import { execSync } from 'node:child_process'
 import { allTools } from '../tools/registry.js'
 
-let cachedSystemPrompt: string | null = null
+// One prompt per working directory — derby racers each work in their own worktree
+const cachedSystemPrompts = new Map<string, string>()
 
 function getGitContext(cwd: string): string | null {
   try {
@@ -20,7 +21,8 @@ function getGitContext(cwd: string): string | null {
 }
 
 export function buildSystemPrompt(cwd: string): string {
-  if (cachedSystemPrompt) return cachedSystemPrompt
+  const cached = cachedSystemPrompts.get(cwd)
+  if (cached) return cached
 
   const parts = [
     'You are Darce, an interactive CLI coding agent. You help users with software engineering tasks by reading, writing, and editing code, running shell commands, and searching codebases.',
@@ -56,10 +58,11 @@ export function buildSystemPrompt(cwd: string): string {
     '- Run tests after making changes to verify correctness.',
   )
 
-  cachedSystemPrompt = parts.join('\n')
-  return cachedSystemPrompt
+  const prompt = parts.join('\n')
+  cachedSystemPrompts.set(cwd, prompt)
+  return prompt
 }
 
 export function resetContext() {
-  cachedSystemPrompt = null
+  cachedSystemPrompts.clear()
 }

@@ -53,6 +53,26 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 - **Free tier** — start without a credit card or an API key.
 - **Open source** — MIT licensed.
 
+## What's New in 0.7.0
+
+Things no other terminal agent does:
+
+- **Model Derby** — `/derby fix the flaky login test` races up to three models from different vendors on the same task, each in its own git worktree. Watch them work side by side, compare their diffs and costs, and apply the winner with Enter. Your files are untouched until you choose.
+- **Rewind tape** — press Esc twice (or `/rewind`) to scrub through every change Darce made, with a live diff of each step. Enter puts your files *and* the conversation back to before that step.
+- **Gear shift** — Shift+↑ / Shift+↓ moves to a smarter or cheaper model instantly, even mid-task, with the price difference shown before the next step runs.
+- **Second opinion** — `/critic on` has a model from a *different* vendor review every edit within seconds and flag bugs inline. Different vendor, different blind spots.
+- **Receipts** — every task ends with a summary card: files changed, commands run, who approved what, the highest risk taken, models used, tokens, cost and time.
+
+```
+╭──────────────────────────────────────────────────────────────╮
+│ files   1 changed +1 −1  auth.ts                             │
+│ shell   1 command                                            │
+│ risk    █░░ changed the project                              │
+│ model   qwen3-coder → deepseek-v4-pro  2.6k tokens · $0.0018 │
+│ time    41s   /undo · /diff · /rewind                        │
+╰──────────────────────────────────────────────────────────────╯
+```
+
 ## What's New in 0.6.0
 
 - **Approvals ranked by risk.** Every command is parsed and scored: read-only, changes the project, reaches outside, or destructive. In the default `auto` mode safe steps just run; risky ones show what will happen and why, and you answer with one key (`y` once, `a` always for this command in this project, `n` deny). Destructive commands can never be "always allowed".
@@ -106,6 +126,9 @@ Requires Node.js 22 or newer. Already installed? Update with `npm install -g dar
 /compact  Shrink context         Ctrl+L         Clear the screen
 /undo     Undo last change       Shift+Tab      Cycle approval mode
 /diff     Review all changes     Ctrl+O         Full output of last step
+/rewind   Scrub & rewind         Esc Esc        Open the rewind tape
+/derby    Race models            Shift+↑/↓      Shift to a smarter/cheaper model
+/critic   Second opinion
 ```
 
 - **7 tools** — Read, Write, Edit, Bash, Glob, Grep, WebFetch
@@ -165,6 +188,9 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 | `/undo` | Undo Darce's last change, including shell effects (`/u`) |
 | `/diff` | Show every file Darce changed this session |
 | `/mode` | Show or set the approval mode |
+| `/rewind` | Scrub through every change and rewind files + conversation (also Esc twice) |
+| `/derby [--models a,b,c] <task>` | Race models on a task in separate worktrees and apply the best |
+| `/critic on\|off [model]` | Second-opinion review of every edit by another vendor's model |
 | `/quit` | Exit (`/q` alias) |
 
 ## Config
@@ -214,6 +240,20 @@ Commands Darce runs get your environment **minus** variables that look like cred
 
 Tool output is scanned for well-known secret formats (API keys, tokens, private keys) and redacted before it reaches a model.
 
+## Configuration
+
+```json
+// ~/.darcerc (all optional)
+{
+  "mode": "auto",
+  "gears": ["qwen/qwen3-coder-next", "qwen/qwen3-coder", "deepseek/deepseek-v4-pro", "anthropic/claude-sonnet-5.5", "anthropic/claude-opus-5.5"],
+  "critic": false,
+  "criticModel": "anthropic/claude-haiku-5.5",
+  "derbyModels": ["anthropic/claude-sonnet-5.5", "openai/gpt-5.6-sol", "google/gemini-3.1-pro-preview"],
+  "passEnv": ["GH_TOKEN"]
+}
+```
+
 ## Contributing
 
 ```bash
@@ -221,7 +261,7 @@ git clone https://github.com/AmerSarhan/darce-cli.git
 cd darce-cli
 npm install
 npm run dev           # Run from source
-npm test              # 163 tests
+npm test              # 169 tests
 npm run build         # Build for production
 ```
 

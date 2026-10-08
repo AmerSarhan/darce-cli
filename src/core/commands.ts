@@ -68,6 +68,21 @@ const COMMANDS: SlashCommand[] = [
     execute: () => '__DIFF__',
   },
   {
+    name: 'rewind',
+    description: 'Scrub through every change and rewind files + conversation (or press Esc twice)',
+    execute: () => '__REWIND__',
+  },
+  {
+    name: 'derby',
+    description: 'Race models on a task in separate worktrees, then apply the best result: /derby [--models a,b,c] <task>',
+    execute: (args) => `__DERBY__:${args}`,
+  },
+  {
+    name: 'critic',
+    description: 'Second opinion: a model from another vendor reviews each edit (/critic on|off [model])',
+    execute: (args) => `__CRITIC__:${args.trim()}`,
+  },
+  {
     name: 'mode',
     description: 'Approval mode: auto, ask, plan (read-only) or full (Shift+Tab cycles)',
     execute: (args) => `__MODE__:${args.trim().toLowerCase()}`,

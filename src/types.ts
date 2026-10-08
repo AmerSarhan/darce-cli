@@ -33,14 +33,14 @@ export type Message = {
 // === Stream Events ===
 
 export type StreamEvent =
-  | { type: 'request_start' }
+  | { type: 'request_start'; model?: string }
   | { type: 'text_delta'; text: string }
   | { type: 'tool_use_start'; id: string; name: string }
   | { type: 'tool_use_delta'; id: string; json: string }
   | { type: 'tool_use_end'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'message_complete'; message: Message; usage: TokenUsage }
   | { type: 'tool_executing'; id: string; name: string; input: Record<string, unknown>; via?: string }
-  | { type: 'tool_result_ready'; id: string; name: string; result: string; isError?: boolean; durationMs: number; display?: ToolDisplay; denied?: boolean }
+  | { type: 'tool_result_ready'; id: string; name: string; result: string; isError?: boolean; durationMs: number; display?: ToolDisplay; denied?: boolean; redacted?: number }
   | { type: 'error'; error: string }
 
 export type SpinnerMode = 'idle' | 'requesting' | 'thinking' | 'responding' | 'tool-input' | 'tool-use'
@@ -96,6 +96,13 @@ export type DarceConfig = {
   shell: string
   maxTurns: number
   historyPath: string
+  /** Models for Shift+↑/↓, cheapest first */
+  gears?: string[]
+  /** Second-opinion reviews of every edit */
+  critic?: boolean
+  criticModel?: string
+  /** Models raced by /derby */
+  derbyModels?: string[]
   /** Environment variables Bash may see even though they look like secrets */
   passEnv?: string[]
 }

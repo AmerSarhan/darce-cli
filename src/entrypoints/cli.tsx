@@ -28,6 +28,10 @@ if (args.includes('--help') || args.includes('-h')) {
   In a session:
     /model, Ctrl+P                  Pick or search 300+ models
     /undo, /diff                    Undo Darce's last change, review all changes
+    /rewind, Esc Esc                Scrub through every change and rewind
+    /derby <task>                   Race models on a task, apply the best result
+    /critic on                      Second-opinion review of every edit
+    Shift+Up / Shift+Down           Shift to a smarter / cheaper model
     Shift+Tab                       Cycle approval mode
     /help                           All commands
     Shift+Enter, Ctrl+J, \\ Enter    New line

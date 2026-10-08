@@ -10,6 +10,7 @@ export type InputIntent =
   | { kind: 'clearScreen' }
   | { kind: 'cycleMode' }
   | { kind: 'expand' }
+  | { kind: 'gear'; dir: 1 | -1 }
   | { kind: 'none' }
 
 const edit = (action: EditorAction): InputIntent => ({ kind: 'edit', action })
@@ -60,6 +61,8 @@ export function intentFor(input: string, key: Key): InputIntent {
   if (key.delete) return edit({ type: 'delete' })
   if (key.leftArrow) return edit({ type: 'left' })
   if (key.rightArrow) return edit({ type: 'right' })
+  if (key.shift && key.upArrow) return { kind: 'gear', dir: 1 }
+  if (key.shift && key.downArrow) return { kind: 'gear', dir: -1 }
   if (key.upArrow) return edit({ type: 'up' })
   if (key.downArrow) return edit({ type: 'down' })
   if (key.home) return edit({ type: 'lineStart' })

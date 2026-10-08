@@ -31,6 +31,14 @@ import { trustedKeys, addTrust } from '../state/trust.js'
 import { setTitle, setProgress, notify } from './termfx.js'
 import type { PermissionMode, ToolDisplay } from '../types.js'
 import { resolve as resolvePath } from 'node:path'
+import { Receipt, type ReceiptData } from './Receipt.js'
+import { Tape } from './Tape.js'
+import { DerbyBoard } from './DerbyBoard.js'
+import { Derby, defaultRacers } from '../core/derby.js'
+import { pickCritic, reviewEdit } from '../core/critic.js'
+import { DEFAULT_GEARS, gearIndex, shiftGear, priceNote } from '../config/gears.js'
+import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
+import type { FileDiff } from '../utils/diff.js'
 
 type Props = {
   provider: Provider
@@ -116,6 +124,11 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [hint, setHint] = useState<string | undefined>()
   const [contextTokens, setContextTokens] = useState(() => estimateMessagesTokens(restored ?? []))
   const [pending, setPending] = useState<Pending | null>(null)
+  const [tape, setTape] = useState<{ index: number; preview: FileDiff[] | null } | null>(null)
+  const [derby, setDerby] = useState<{ d: Derby; task: string; selected: number; finished: boolean } | null>(null)
+  const [, setDerbyTick] = useState(0)
+  const [criticOn, setCriticOn] = useState(!!state.config.critic)
+  const lastEsc = useRef(0)
   const [tainted, setTainted] = useState(false)
 
   const messagesRef = useRef<Message[]>(restored ?? [])
@@ -130,6 +143,11 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const taintedRef = useRef(false)
   const modeRef = useRef(state.mode)
   modeRef.current = state.mode
+  const gears = state.config.gears?.length ? state.config.gears : DEFAULT_GEARS
+  // The model is read before every request, so a gear shift applies even mid-task
+  const modelRef = useRef(state.modelOverride || state.currentModel)
+  const criticRef = useRef(criticOn)
+  criticRef.current = criticOn
 
   useEffect(() => {
     const cps = checkpointsRef.current!
@@ -139,6 +157,10 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   }, [])
 
   const commit = useCallback((item: TranscriptItem) => setItems(prev => [...prev, item]), [])
+
+  useEffect(() => {
+    if (state.modelOverride) modelRef.current = state.modelOverride
+  }, [state.modelOverride])
 
   const flashHint = useCallback((text: string, ms = 2000) => {
     setHint(text)
@@ -164,8 +186,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     abortRef.current = controller
     setActivity({ label: 'Thinking', startedAt: Date.now() })
 
-    const model = state.modelOverride || selectModel(messagesRef.current, state.config.router)
-    setState(prev => ({ ...prev, currentModel: model }))
+    if (!state.modelOverride) modelRef.current = selectModel(messagesRef.current, state.config.router)
+    setState(prev => ({ ...prev, currentModel: modelRef.current }))
+    const costBefore = getTotalCost()
+    const tokensBefore = getTotalTokens()
+    const receipt: ReceiptData = { files: [], commands: 0, approvedByYou: 0, denied: 0, maxRisk: 0, redacted: 0, models: [], tokens: 0, cost: 0, ms: 0, undoable: true, stopped: false }
+    const fileStats = new Map<string, { path: string; added: number; removed: number; created: boolean }>()
+    let steps = 0
 
     // Streaming text: complete markdown blocks are frozen into the transcript,
     // only the unfinished tail stays in the live region.
@@ -195,6 +222,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
 
     const authorize = async (call: { id: string; name: string; input: Record<string, unknown> }) => {
       const risk = toolRisk(call.name, call.input, state.cwd)
+      receipt.maxRisk = Math.max(receipt.maxRisk, risk.level) as ReceiptData['maxRisk']
       const mode = modeRef.current
       const key = call.name === 'Bash' ? trustKey(String(call.input.command ?? '')) : undefined
       if (risk.level === 0 || mode === 'full') return { allow: true as const }
@@ -226,15 +254,15 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       })
     }
 
-    const beforeChange = (call: { name: string; input: Record<string, unknown> }) => {
+    const beforeChange = (call: { id: string; name: string; input: Record<string, unknown> }) => {
       const paths = call.input.file_path ? [String(call.input.file_path)] : []
-      checkpointsRef.current?.snapshot(`${call.name} ${toolSummary(call.name, call.input)}`, paths)
+      checkpointsRef.current?.snapshot(`${call.name} ${toolSummary(call.name, call.input)}`, paths, call.id)
     }
 
     try {
       const gen = query({
         messages: messagesRef.current,
-        model,
+        model: () => modelRef.current,
         provider,
         cwd: state.cwd,
         systemPrompt: buildSystemPrompt(state.cwd),
@@ -251,6 +279,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         const event = result.value
         switch (event.type) {
           case 'request_start':
+            if (receipt.models[receipt.models.length - 1] !== modelRef.current) receipt.models.push(modelRef.current)
             buffer = ''
             committedUpTo = 0
             setActivity({ label: 'Thinking', startedAt: Date.now() })
@@ -289,6 +318,24 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
               path: filePath,
             })
             lastToolRef.current = { name: event.name, summary, result: event.result, display: event.display }
+            steps++
+            receipt.redacted += event.redacted ?? 0
+            if (event.denied) receipt.denied++
+            if (approvals.get(event.id) === 'approved by you') receipt.approvedByYou++
+            if (event.name === 'Bash' && !event.denied) receipt.commands++
+            if (event.display?.kind === 'diff' && !event.isError) {
+              const d = event.display
+              const prev = fileStats.get(d.path)
+              fileStats.set(d.path, { path: d.path, added: (prev?.added ?? 0) + d.added, removed: (prev?.removed ?? 0) + d.removed, created: prev?.created ?? d.created })
+              if (criticRef.current) {
+                const criticModel = pickCritic(modelRef.current, state.config.criticModel)
+                void reviewEdit(provider, criticModel, text, d).then(v => {
+                  if (!v) return
+                  commit({ kind: 'critic', id: newId(), model: criticModel, path: d.path, issue: v.ok ? undefined : v.issue })
+                  if (!v.ok) notesRef.current.push(`a second reviewer (${criticModel}) flagged your edit to ${d.path}: ${v.issue}`)
+                })
+              }
+            }
             if (event.name === 'WebFetch' && !event.isError) {
               taintedRef.current = true
               setTainted(true)
@@ -319,6 +366,15 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       setTitle('darce')
       setProgress('off')
       if (took >= 20_000) notify('Darce finished', text.split('\n')[0]!.slice(0, 80))
+      if (steps > 0) {
+        receipt.files = [...fileStats.values()]
+        receipt.tokens = getTotalTokens() - tokensBefore
+        receipt.cost = getTotalCost() - costBefore
+        receipt.ms = took
+        receipt.undoable = checkpointsRef.current!.count > 0
+        receipt.stopped = controller.signal.aborted
+        commit({ kind: 'receipt', id: newId(), data: receipt })
+      }
       if (flushTimer) clearTimeout(flushTimer)
       setTail('')
       setActivity(null)
@@ -328,6 +384,81 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       setBusy(false)
     }
   }, [state, provider, setState, commit])
+
+  const openTape = useCallback(() => {
+    const cps = checkpointsRef.current!
+    if (cps.count === 0) { flashHint('Nothing to rewind yet: Darce has not changed anything this session.'); return }
+    const index = cps.count - 1
+    setTape({ index, preview: cps.stepDiff(index) })
+  }, [flashHint])
+
+  const rewindTo = useCallback((index: number) => {
+    const cps = checkpointsRef.current!
+    const cp = cps.list()[index]
+    if (!cp) return
+    const r = cps.rewindTo(index)
+    setTape(null)
+    if (!r.ok) { commit({ kind: 'error', id: newId(), text: r.reason }); return }
+    // Cut the conversation back to before the message that made this step
+    let cut = -1
+    if (cp.toolUseId) {
+      cut = messagesRef.current.findIndex(m => Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use' && b.id === cp.toolUseId))
+    }
+    if (cut >= 0) messagesRef.current = messagesRef.current.slice(0, cut)
+    setContextTokens(estimateMessagesTokens(messagesRef.current))
+    const files = [...r.restored.map(f => `restored ${f}`), ...r.removed.map(f => `removed ${f}`)]
+    commit({ kind: 'system', id: newId(), text: `Rewound to before: ${cp.label}\n${files.length ? files.map(f => `  ${f}`).join('\n') : '  no file changes'}${cut >= 0 ? '\nThe conversation was rewound to the same point.' : ''}` })
+    notesRef.current.push(`the user rewound the project to before your step "${cp.label}"`)
+  }, [commit])
+
+  const startDerby = useCallback(async (args: string) => {
+    let rest = args.trim()
+    let models: string[] | undefined
+    const m = rest.match(/^--models\s+(\S+)\s*/)
+    if (m) { models = m[1]!.split(',').filter(Boolean); rest = rest.slice(m[0].length) }
+    if (!rest) { commit({ kind: 'system', id: newId(), text: 'Usage: /derby [--models a,b,c] <task>\nRaces up to 3 models on the task, each in its own git worktree. Your files are untouched until you pick a winner.' }); return }
+    const cps = checkpointsRef.current!
+    const base = cps.commitWorkingTree('darce derby base')
+    if (!base || !cps.gitRoot) { commit({ kind: 'system', id: newId(), text: '/derby needs a git repository: each model works in its own worktree.' }); return }
+    const racers = (models ?? defaultRacers(modelRef.current, state.config.derbyModels)).slice(0, 3)
+    commit({ kind: 'user', id: newId(), text: `/derby ${rest}` })
+    const d = new Derby(cps.gitRoot, base, racers, () => setDerbyTick(n => n + 1))
+    setDerby({ d, task: rest, selected: 0, finished: false })
+    setBusy(true)
+    setTitle('darce · derby')
+    setProgress('busy')
+    const started = Date.now()
+    await d.run(rest, messagesRef.current, provider, state.config.passEnv)
+    setProgress('off')
+    setTitle('darce')
+    if (Date.now() - started >= 20_000) notify('Derby finished', 'Pick a winner')
+    const best = d.racers.findIndex(r => r.status === 'done' && r.diffs.length > 0)
+    setDerby(prev => prev && { ...prev, finished: true, selected: best >= 0 ? best : 0 })
+  }, [commit, provider, state.config.derbyModels, state.config.passEnv])
+
+  const finishDerby = useCallback((applyIndex: number | null) => {
+    if (!derby) return
+    const { d, task } = derby
+    if (applyIndex !== null) {
+      const r = d.racers[applyIndex]!
+      checkpointsRef.current!.snapshot(`Derby: apply ${r.model.split('/').pop()}`)
+      const { files } = d.apply(applyIndex)
+      commit({ kind: 'system', id: newId(), text: `Applied ${r.model}'s result: ${files} file${files === 1 ? '' : 's'} changed ($${r.cost.toFixed(4)}, ${Math.round(r.ms / 1000)}s). /undo reverts it.` })
+      for (const diff of r.diffs) commit({ kind: 'expanded', id: newId(), name: diff.created ? 'new file' : 'changed', summary: diff.path, result: '', display: diff })
+      messagesRef.current = [
+        ...messagesRef.current,
+        { role: 'user', content: task },
+        { role: 'assistant', content: `${r.answer.trim() || 'Done.'}\n\n(These changes came from ${r.model} in a model derby and are now applied.)` },
+      ]
+      setContextTokens(estimateMessagesTokens(messagesRef.current))
+    } else {
+      d.stop()
+      commit({ kind: 'system', id: newId(), text: 'Derby discarded. Your files were not changed.' })
+    }
+    d.cleanup()
+    setDerby(null)
+    setBusy(false)
+  }, [derby, commit])
 
   const handleCommand = useCallback((text: string) => {
     const ctx: CommandContext = {
@@ -372,6 +503,17 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       for (const d of diffs) commit({ kind: 'expanded', id: newId(), name: d.created ? 'new file' : 'changed', summary: d.path, result: '', display: d })
       return
     }
+    if (result === '__REWIND__') { openTape(); return }
+    if (result?.startsWith('__DERBY__:')) { void startDerby(result.slice(10)); return }
+    if (result?.startsWith('__CRITIC__:')) {
+      const [arg, model] = result.slice(11).split(/\s+/)
+      const on = arg === 'on' ? true : arg === 'off' ? false : !criticOn
+      setCriticOn(on)
+      commit({ kind: 'system', id: newId(), text: on
+        ? `Second opinion on: every edit is reviewed by ${model || state.config.criticModel || pickCritic(modelRef.current)} (a different vendor from the model doing the work). Each review is a small extra request.`
+        : 'Second opinion off.' })
+      return
+    }
     if (result?.startsWith('__MODE__:')) {
       const want = result.slice(9) as PermissionMode
       if (!want) { commit({ kind: 'system', id: newId(), text: `Mode: ${MODE_INFO[state.mode]}\nChoose with /mode auto|ask|plan|full, or press Shift+Tab.` }); return }
@@ -385,7 +527,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (/^\/compact\b/.test(text)) return
     commit({ kind: 'user', id: newId(), text })
     if (result) commit({ kind: 'system', id: newId(), text: result })
-  }, [state.currentModel, state.cwd, state.mode, setState, exit, clearScreen, commit])
+  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, setState, exit, clearScreen, commit, openTape, startDerby, criticOn])
 
   // Run queued messages one after another
   useEffect(() => {
@@ -405,6 +547,32 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   }, [initialPrompt, runQuery])
 
   useInput((input, key) => {
+    if (tape) {
+      const cps = checkpointsRef.current!
+      const move = (i: number) => setTape({ index: i, preview: cps.stepDiff(i) })
+      if (key.leftArrow) move(Math.max(0, tape.index - 1))
+      else if (key.rightArrow) move(Math.min(cps.count - 1, tape.index + 1))
+      else if (key.return) rewindTo(tape.index)
+      else if (key.escape || (key.ctrl && input === 'c')) setTape(null)
+      return
+    }
+    if (derby) {
+      if (!derby.finished) {
+        if (key.escape || (key.ctrl && input === 'c')) derby.d.stop()
+        return
+      }
+      const n = derby.d.racers.length
+      const num = parseInt(input, 10)
+      if (num >= 1 && num <= n) setDerby({ ...derby, selected: num - 1 })
+      else if (key.upArrow) setDerby({ ...derby, selected: (derby.selected + n - 1) % n })
+      else if (key.downArrow) setDerby({ ...derby, selected: (derby.selected + 1) % n })
+      else if (key.return) {
+        const r = derby.d.racers[derby.selected]!
+        if (r.diffs.length) finishDerby(derby.selected)
+        else flashHint('That model made no changes. Pick another, or Esc to discard.')
+      } else if (key.escape || (key.ctrl && input === 'c')) finishDerby(null)
+      return
+    }
     if (pending) {
       const lower = input.toLowerCase()
       if (lower === 'y') pending.resolve({ allow: true, via: 'approved by you' })
@@ -442,8 +610,23 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         if (busy) {
           abortRef.current?.abort()
           setQueue([])
+          return
+        }
+        // Esc twice on an empty prompt opens the rewind tape
+        if (!editor.text) {
+          if (Date.now() - lastEsc.current < 800) { lastEsc.current = 0; openTape() }
+          else lastEsc.current = Date.now()
         }
         return
+      case 'gear': {
+        const from = modelRef.current
+        const to = shiftGear(gears, from, intent.dir)
+        if (to === from) { flashHint(intent.dir === 1 ? 'Already in the top gear' : 'Already in the lowest gear'); return }
+        modelRef.current = to
+        setState(prev => ({ ...prev, modelOverride: to, currentModel: to }))
+        flashHint(`${intent.dir === 1 ? '▲' : '▼'} ${to.split('/').pop()}  ${priceNote(to, from)}${busy ? ' · applies from the next step' : ''}`, 3500)
+        return
+      }
       case 'modelPicker':
         if (!busy) setShowPicker(true)
         return
@@ -495,7 +678,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     }
   }, { isActive: !showPicker })
 
-  usePaste(text => dispatch({ type: 'insert', text }), { isActive: !showPicker && !pending })
+  usePaste(text => dispatch({ type: 'insert', text }), { isActive: !showPicker && !pending && !tape && !derby })
 
   const handleModelSelect = useCallback((model: string) => {
     setState(prev => ({ ...prev, modelOverride: model, currentModel: model }))
@@ -523,6 +706,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         ) : null}
 
         {pending ? <PermissionPrompt req={pending.req} /> : null}
+        {tape ? (
+          <Tape
+            frames={checkpointsRef.current!.list().map(c => ({ label: c.label, at: c.at }))}
+            index={tape.index}
+            preview={tape.preview}
+          />
+        ) : null}
+        {derby ? <DerbyBoard task={derby.task} racers={derby.d.racers} selected={derby.selected} finished={derby.finished} /> : null}
 
         {queue.map((q, i) => (
           <Text key={i} color={t.faint}>↳ queued: {q.split('\n')[0]}</Text>
@@ -536,8 +727,17 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           />
         )}
 
-        <Prompt editor={editor} busy={busy} dimmed={showPicker || !!pending} />
-        <StatusBar model={state.currentModel} cwd={state.cwd} contextTokens={contextTokens} hint={hint} mode={state.mode} tainted={tainted} />
+        <Prompt editor={editor} busy={busy} dimmed={showPicker || !!pending || !!tape || !!derby} />
+        <StatusBar
+          model={state.currentModel}
+          cwd={state.cwd}
+          contextTokens={contextTokens}
+          hint={hint}
+          mode={state.mode}
+          tainted={tainted}
+          gear={{ index: gearIndex(gears, state.currentModel), total: gears.length }}
+          critic={criticOn}
+        />
       </Box>
     </>
   )

@@ -40,6 +40,9 @@ import { bashRisk, toolRisk, trustKey } from './src/core/risk.js'
 import { Checkpoints } from './src/core/checkpoints.js'
 import { fileDiff } from './src/utils/diff.js'
 import { execSync } from 'node:child_process'
+import { shiftGear, priceNote, DEFAULT_GEARS } from './src/config/gears.js'
+import { Derby, defaultRacers } from './src/core/derby.js'
+import { pickCritic } from './src/core/critic.js'
 import { buildSystemPrompt, resetContext } from './src/core/context.js'
 import type { ToolContext, Message, RouterConfig } from './src/types.js'
 
@@ -856,6 +859,7 @@ async function runTests() {
   await testModelCatalog()
   await testPhase0()
   await testPhase1()
+  await testPhase2()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -1088,6 +1092,12 @@ async function testPhase1() {
   })
   await test('Diff: new file is marked created', () => fileDiff('n.ts', null, 'x\ny\n').created)
 
+  await test('Context: system prompt is per working directory', () => {
+    resetContext()
+    const a = buildSystemPrompt('/tmp/project-a')
+    const b = buildSystemPrompt('/tmp/project-b')
+    return a.includes('/tmp/project-a') && b.includes('/tmp/project-b') && !b.includes('/tmp/project-a')
+  })
   await test('Checkpoints: undo reverts shell effects and keeps git state', () => {
     const repo = join(TMP_DIR, 'cp-repo')
     mkdirSync(repo, { recursive: true })
@@ -1109,6 +1119,61 @@ async function testPhase1() {
     const second = cps.undo() // only the no-op snapshot is left
     cps.cleanup()
     return ok && sameGit && !second.ok
+  })
+}
+
+// ============================================================
+// Phase 2: gears, critic, derby
+// ============================================================
+
+async function testPhase2() {
+  await test('Gears: shift up and down, clamp at the ends', () =>
+    shiftGear(DEFAULT_GEARS, DEFAULT_GEARS[1]!, 1) === DEFAULT_GEARS[2] &&
+    shiftGear(DEFAULT_GEARS, DEFAULT_GEARS[0]!, -1) === DEFAULT_GEARS[0] &&
+    shiftGear(DEFAULT_GEARS, 'some/other-model', 1) === DEFAULT_GEARS[DEFAULT_GEARS.length - 1])
+  await test('Gears: price note compares costs', () => /× the cost/.test(priceNote('anthropic/claude-opus-5.5', 'qwen/qwen3-coder')))
+  await test('Critic: picks a different vendor', () =>
+    !pickCritic('anthropic/claude-sonnet-5.5').startsWith('anthropic/') && pickCritic('openai/gpt-5.6-sol').startsWith('anthropic/'))
+  await test('Derby: default racers are unique, max 3', () => {
+    const r = defaultRacers('anthropic/claude-sonnet-5.5')
+    return r.length === 3 && new Set(r).size === 3
+  })
+
+  await test('Derby: racers work in isolation; apply copies only the winner', async () => {
+    const repo = join(TMP_DIR, 'derby-repo')
+    mkdirSync(join(repo, 'src'), { recursive: true })
+    execSync('git init -q && git config user.email t@t && git config user.name t', { cwd: repo })
+    writeFileSync(join(repo, 'src', 'a.ts'), 'value = 1\n')
+    execSync('git add -A && git commit -qm init', { cwd: repo })
+    registerAllTools()
+
+    // Fake provider: each model writes its own name into src/a.ts, then finishes
+    const fake = {
+      async *stream(messages: any[], model: string) {
+        yield { type: 'request_start' }
+        const last = messages[messages.length - 1]
+        const cwd = String(messages[0].content).match(/Current directory: (\S+)/)![1]
+        if (last.role === 'user' && typeof last.content === 'string') {
+          const input = { file_path: join(cwd, 'src', 'a.ts'), content: `value = "${model}"\n` }
+          yield { type: 'tool_use_end', id: 'w', name: 'Write', input }
+          yield { type: 'message_complete', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'w', name: 'Write', input }] }, usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }
+          return
+        }
+        yield { type: 'text_delta', text: 'done' }
+        yield { type: 'message_complete', message: { role: 'assistant', content: 'done' }, usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }
+      },
+      async listModels() { return [] },
+    }
+    const base = new Checkpoints(repo, 'derby').commitWorkingTree('base')!
+    const d = new Derby(repo, base, ['m/one', 'm/two'], () => {})
+    await d.run('set value', [], fake as any)
+    const untouched = readFileSync(join(repo, 'src', 'a.ts'), 'utf-8') === 'value = 1\n'
+    const bothDone = d.racers.every(r => r.status === 'done' && r.diffs.length === 1)
+    d.apply(1)
+    const applied = readFileSync(join(repo, 'src', 'a.ts'), 'utf-8') === 'value = "m/two"\n'
+    d.cleanup()
+    const worktrees = execSync('git worktree list', { cwd: repo, encoding: 'utf-8' }).trim().split('\n').length
+    return untouched && bothDone && applied && worktrees === 1
   })
 }
 

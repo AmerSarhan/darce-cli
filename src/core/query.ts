@@ -9,7 +9,8 @@ import { redactSecrets } from '../utils/redact.js'
 
 export type QueryParams = {
   messages: Message[]
-  model: string
+  /** A fixed model, or a getter read before every request (lets the user shift gears mid-task) */
+  model: string | (() => string)
   provider: Provider
   cwd: string
   systemPrompt: string
@@ -20,7 +21,7 @@ export type QueryParams = {
   /** Decide whether a tool call may run. Omitted = always allowed. */
   authorize?: (call: { id: string; name: string; input: Record<string, unknown> }) => Promise<{ allow: true; via?: string } | { allow: false; reason: string }>
   /** Called right before a tool that changes the project runs (used for undo snapshots). */
-  beforeChange?: (call: { name: string; input: Record<string, unknown> }) => void
+  beforeChange?: (call: { id: string; name: string; input: Record<string, unknown> }) => void
 }
 
 export type QueryResult = {
@@ -60,12 +61,13 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
       return { reason: 'aborted', messages }
     }
 
-    // Stream from provider
+    // Stream from provider — the model is re-read every turn
+    const model = typeof params.model === 'function' ? params.model() : params.model
     const allMessages = [systemMessage, ...messages]
     const toolUseBlocks: ToolUseContent[] = []
     let assistantMessage: Message | null = null
 
-    for await (const event of provider.stream(allMessages, params.model, tools, params.abortSignal)) {
+    for await (const event of provider.stream(allMessages, model, tools, params.abortSignal)) {
       yield event
 
       if (event.type === 'tool_use_end') {
@@ -79,7 +81,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
 
       if (event.type === 'message_complete') {
         assistantMessage = event.message
-        addUsage(params.model, event.usage)
+        addUsage(model, event.usage)
       }
 
       if (event.type === 'error') {
@@ -157,7 +159,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
         continue
       }
 
-      if (!getTool(block.name)?.isReadOnly) params.beforeChange?.({ name: block.name, input: block.input })
+      if (!getTool(block.name)?.isReadOnly) params.beforeChange?.({ id: block.id, name: block.name, input: block.input })
 
       yield { type: 'tool_executing', id: block.id, name: block.name, input: block.input, via: decision.via }
 
@@ -165,7 +167,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
       const executed = await executeTool(block)
       const isError = executed.isError
       // Never send credentials to the model, even if a file or command printed them
-      const result = redactSecrets(executed.result).text
+      const { text: result, count: redacted } = redactSecrets(executed.result)
       const durationMs = Date.now() - started
 
       // Track retried tool IDs to avoid infinite retry loops
@@ -178,7 +180,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
         }
       }
 
-      yield { type: 'tool_result_ready', id: block.id, name: block.name, result, isError, durationMs, display: executed.display }
+      yield { type: 'tool_result_ready', id: block.id, name: block.name, result, isError, durationMs, display: executed.display, redacted }
 
       // Add to message history for the model
       messages.push({
