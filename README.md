@@ -53,6 +53,10 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 - **Free tier** — start without a credit card or an API key.
 - **Open source** — MIT licensed.
 
+## What's New in 0.9.0
+
+- **A proper welcome.** The DARCE wordmark sweeps in with an ember gradient, then a welcome card shows your model, approval mode, project, account, plan and requests left, plus the shortcuts worth knowing.
+
 ## What's New in 0.8.0
 
 - **A much smarter brain.** Darce now works like a senior engineer: understand → plan → change → verify, with a live **plan checklist** you can watch. It reads your project's `AGENTS.md` / `CLAUDE.md` / `.cursorrules`, gets a quick overview of your stack and scripts, and follows built-in engineering standards (proof over assurances, no surprise deploys, no AI attribution in commits).

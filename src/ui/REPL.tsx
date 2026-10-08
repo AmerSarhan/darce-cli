@@ -35,6 +35,7 @@ import { Receipt, type ReceiptData } from './Receipt.js'
 import { Tape } from './Tape.js'
 import { DerbyBoard } from './DerbyBoard.js'
 import { PlanPanel } from './PlanPanel.js'
+import { Intro } from './Welcome.js'
 import type { PlanDisplay } from '../types.js'
 import { Derby, defaultRacers } from '../core/derby.js'
 import { pickCritic, reviewEdit } from '../core/critic.js'
@@ -111,22 +112,31 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const { write } = useStdout()
   const t = theme()
 
+  const accountLine = useRef<string | undefined>(undefined)
   const banner = useCallback((): TranscriptItem => ({
     kind: 'banner',
     id: newId('b'),
     version: VERSION,
     model: state.currentModel,
     cwd: shortCwd(state.cwd),
-  }), [state.currentModel, state.cwd])
+    mode: state.mode,
+    account: accountLine.current,
+  }), [state.currentModel, state.cwd, state.mode])
 
-  const [items, setItems] = useState<TranscriptItem[]>(() => {
+  // The welcome card is committed after the intro animation (and the account lookup) finish
+  const [items, setItems] = useState<TranscriptItem[]>([])
+  const [introDone, setIntroDone] = useState(false)
+  const [accountReady, setAccountReady] = useState(false)
+  const finishIntro = useCallback(() => {
+    if (introDone) return
+    setIntroDone(true)
     const initial: TranscriptItem[] = [banner()]
     if (restored?.length) {
       initial.push(...itemsFromMessages(restored))
       initial.push({ kind: 'system', id: newId(), text: `Resumed session ${state.sessionId.slice(0, 8)} (${restored.length} messages).` })
     }
-    return initial
-  })
+    setItems(prev => [...initial, ...prev])
+  }, [introDone, restored, state.sessionId])
   const [staticKey, setStaticKey] = useState(0)
   const [editor, dispatch] = useReducer(editorReducer, undefined, () => emptyEditor(loadHistory()))
   const [busy, setBusy] = useState(false)
@@ -193,6 +203,23 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const modelRef = useRef(state.modelOverride || state.currentModel)
   const criticRef = useRef(criticOn)
   criticRef.current = criticOn
+
+  // Account line for the welcome card (bounded wait so startup never stalls)
+  useEffect(() => {
+    let done = false
+    const finish = () => { if (!done) { done = true; setAccountReady(true) } }
+    const timer = setTimeout(finish, 1200)
+    fetchAccount(state.config.apiKey, state.config.apiBase || undefined).then(info => {
+      if (info) {
+        const plan = info.tier === 'free' ? 'Starter' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
+        const left = typeof info.daily_limit === 'number' ? ` · ${Math.max(0, info.daily_limit - info.daily_requests).toLocaleString()} of ${info.daily_limit.toLocaleString()} requests left` : ' · unlimited'
+        accountLine.current = `${info.email} · ${plan}${left}`
+      }
+      clearTimeout(timer)
+      finish()
+    })
+    return () => clearTimeout(timer)
+  }, [])
 
   useEffect(() => {
     const cps = checkpointsRef.current!
@@ -725,11 +752,11 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   // Initial prompt from the command line
   const startedInitial = useRef(false)
   useEffect(() => {
-    if (initialPrompt && !startedInitial.current) {
+    if (initialPrompt && introDone && !startedInitial.current) {
       startedInitial.current = true
       void runQuery(initialPrompt)
     }
-  }, [initialPrompt, runQuery])
+  }, [initialPrompt, introDone, runQuery])
 
   useInput((input, key) => {
     if (tape) {
@@ -911,6 +938,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       </Static>
 
       <Box flexDirection="column">
+        {!introDone ? <Intro onDone={finishIntro} ready={accountReady} /> : null}
         {tail ? (
           <Box marginBottom={1}>
             <Markdown text={closeOpenFence(tail)} />

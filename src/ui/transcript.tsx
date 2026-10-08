@@ -8,12 +8,13 @@ import { DiffView } from './DiffView.js'
 import { link } from './termfx.js'
 import type { ToolDisplay, PlanDisplay } from '../types.js'
 import { PlanPanel } from './PlanPanel.js'
+import { Welcome } from './Welcome.js'
 import { Receipt, type ReceiptData } from './Receipt.js'
 
 // Everything that has happened in the session. Committed items are printed
 // once via <Static> and never re-rendered.
 export type TranscriptItem =
-  | { kind: 'banner'; id: string; version: string; model: string; cwd: string }
+  | { kind: 'banner'; id: string; version: string; model: string; cwd: string; mode?: string; account?: string }
   | { kind: 'user'; id: string; text: string }
   | { kind: 'assistant'; id: string; text: string }
   | { kind: 'tool'; id: string; name: string; summary: string; result: string; isError?: boolean; durationMs?: number; display?: ToolDisplay; approval?: string; path?: string }
@@ -117,16 +118,7 @@ export function TranscriptItemView({ item }: { item: TranscriptItem }) {
   const t = theme()
   switch (item.kind) {
     case 'banner':
-      return (
-        <Box marginBottom={1} flexDirection="column">
-          <Text>
-            <Text color={t.accent}>{'> '}</Text>
-            <Text bold>Darce</Text>
-            <Text color={t.faint}> v{item.version}  {item.model}  {item.cwd}</Text>
-          </Text>
-          <Text color={t.faint}>/model to switch models · /help for commands · Shift+Enter or Ctrl+J for a new line</Text>
-        </Box>
-      )
+      return <Welcome info={{ version: item.version, model: item.model, mode: item.mode ?? 'auto', cwd: item.cwd, account: item.account }} />
     case 'user':
       return (
         <Box marginBottom={1}>
