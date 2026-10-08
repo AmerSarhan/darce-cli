@@ -2,7 +2,8 @@ import type { Provider } from '../providers/provider.js'
 import type { ContentBlock, Message } from '../types.js'
 import { addUsage } from '../state/costTracker.js'
 
-export const DEFAULT_SUGGEST_MODEL = 'qwen/qwen3.8-flash'
+// Fast non-reasoning model: answers in ~2s (reasoning "flash" models took 15-20s)
+export const DEFAULT_SUGGEST_MODEL = 'qwen/qwen3-coder-next'
 
 /** A compact transcript of the last few turns: what the user asked, what Darce did and said. */
 function recap(messages: Message[]): string {

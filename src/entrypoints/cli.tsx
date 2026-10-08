@@ -250,6 +250,8 @@ async function main(modelOverride?: string, initialPrompt?: string, resumeSessio
   )
 
   await waitUntilExit()
+  // Don't wait on background requests (model list, predictions) — quit right away
+  process.exit(0)
 }
 
 // === Print mode: plain output for scripts, pipes and CI ===
