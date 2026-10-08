@@ -5,6 +5,7 @@ import { toAPITools } from '../tools/registry.js'
 import { addUsage } from '../state/costTracker.js'
 import { debug } from '../utils/logger.js'
 import { shouldCompact, compactMessages } from './conversation.js'
+import { redactSecrets } from '../utils/redact.js'
 
 export type QueryParams = {
   messages: Message[]
@@ -15,6 +16,7 @@ export type QueryParams = {
   maxTurns?: number
   readFiles: Set<string>
   abortSignal?: AbortSignal
+  passEnv?: string[]
 }
 
 export type QueryResult = {
@@ -33,6 +35,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
     cwd: params.cwd,
     readFiles: params.readFiles,
     abortSignal: params.abortSignal,
+    passEnv: params.passEnv,
   }
 
   // Prepend system message
@@ -58,7 +61,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
     const toolUseBlocks: ToolUseContent[] = []
     let assistantMessage: Message | null = null
 
-    for await (const event of provider.stream(allMessages, params.model, tools)) {
+    for await (const event of provider.stream(allMessages, params.model, tools, params.abortSignal)) {
       yield event
 
       if (event.type === 'tool_use_end') {
@@ -81,7 +84,8 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
     }
 
     if (!assistantMessage) {
-      return { reason: 'error', messages }
+      // A partial answer is dropped on abort — history stays consistent
+      return { reason: params.abortSignal?.aborted ? 'aborted' : 'error', messages }
     }
 
     messages.push(assistantMessage)
@@ -129,10 +133,23 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
     // Execute all tools and yield live events
     const allBlocks = [...concurrent, ...sequential]
     for (const block of allBlocks) {
-      // Tell the REPL which tool is running
-      yield { type: 'tool_executing', name: block.name, input: block.input } as StreamEvent
+      // Every tool_use needs a tool_result, even when the user stops Darce mid-way
+      if (params.abortSignal?.aborted) {
+        messages.push({
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: block.id, content: 'Not run: the user interrupted.', is_error: true }],
+        })
+        continue
+      }
 
-      const { result, isError } = await executeTool(block)
+      yield { type: 'tool_executing', id: block.id, name: block.name, input: block.input }
+
+      const started = Date.now()
+      const executed = await executeTool(block)
+      const isError = executed.isError
+      // Never send credentials to the model, even if a file or command printed them
+      const result = redactSecrets(executed.result).text
+      const durationMs = Date.now() - started
 
       // Track retried tool IDs to avoid infinite retry loops
       if (isError) {
@@ -144,8 +161,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
         }
       }
 
-      // Tell the REPL the result
-      yield { type: 'tool_result_ready', name: block.name, result, isError } as StreamEvent
+      yield { type: 'tool_result_ready', id: block.id, name: block.name, result, isError, durationMs }
 
       // Add to message history for the model
       messages.push({
@@ -159,6 +175,9 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
       })
     }
 
+    if (params.abortSignal?.aborted) {
+      return { reason: 'aborted', messages }
+    }
     // Loop continues — model will see tool results
   }
 }

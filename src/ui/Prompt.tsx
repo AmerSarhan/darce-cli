@@ -1,146 +1,47 @@
-import React, { useState, useCallback } from 'react'
-import { Box, Text, useInput } from 'ink'
-
-const MULTI_LINE_DELIMITERS = ['"""', '```']
+import React from 'react'
+import { Box, Text } from 'ink'
+import { cursorPosition, type EditorState } from './input/editor.js'
+import { theme } from './theme.js'
 
 type Props = {
-  onSubmit: (text: string) => void
-  isLoading: boolean
-  history: string[]
-  disabled?: boolean
+  editor: EditorState
+  busy: boolean
+  dimmed?: boolean
 }
 
-export function Prompt({ onSubmit, isLoading, history, disabled = false }: Props) {
-  const [input, setInput] = useState('')
-  const [historyIndex, setHistoryIndex] = useState(-1)
-  const [cursor, setCursor] = useState(0)
-  const [multiLine, setMultiLine] = useState(false)
-  const [multiLineBuffer, setMultiLineBuffer] = useState<string[]>([])
-  const [multiLineDelimiter, setMultiLineDelimiter] = useState<string>('')
-
-  useInput((ch, key) => {
-    if (isLoading) return
-
-    if (key.return) {
-      if (multiLine) {
-        // Check if current line ends the multi-line block
-        const trimmed = input.trim()
-        if (MULTI_LINE_DELIMITERS.includes(trimmed) && trimmed === multiLineDelimiter) {
-          // End multi-line mode and submit
-          const fullText = multiLineBuffer.join('\n')
-          if (fullText.trim()) {
-            onSubmit(fullText)
-          }
-          setInput('')
-          setCursor(0)
-          setHistoryIndex(-1)
-          setMultiLine(false)
-          setMultiLineBuffer([])
-          setMultiLineDelimiter('')
-          return
-        }
-        // Add current line to buffer and reset input
-        setMultiLineBuffer(prev => [...prev, input])
-        setInput('')
-        setCursor(0)
-        return
-      }
-
-      // Check if input starts multi-line mode
-      const trimmed = input.trim()
-      const delimiter = MULTI_LINE_DELIMITERS.find(d => trimmed === d)
-      if (delimiter) {
-        setMultiLine(true)
-        setMultiLineBuffer([])
-        setMultiLineDelimiter(delimiter)
-        setInput('')
-        setCursor(0)
-        return
-      }
-
-      const text = input.trim()
-      if (text) {
-        onSubmit(text)
-        setInput('')
-        setCursor(0)
-        setHistoryIndex(-1)
-      }
-      return
-    }
-
-    if (key.upArrow) {
-      if (multiLine) return
-      if (history.length === 0) return
-      const nextIndex = Math.min(historyIndex + 1, history.length - 1)
-      setHistoryIndex(nextIndex)
-      const entry = history[nextIndex]!
-      setInput(entry)
-      setCursor(entry.length)
-      return
-    }
-
-    if (key.downArrow) {
-      if (multiLine) return
-      if (historyIndex <= 0) {
-        setHistoryIndex(-1)
-        setInput('')
-        setCursor(0)
-        return
-      }
-      const nextIndex = historyIndex - 1
-      setHistoryIndex(nextIndex)
-      const entry = history[nextIndex]!
-      setInput(entry)
-      setCursor(entry.length)
-      return
-    }
-
-    if (key.backspace || key.delete) {
-      if (cursor > 0) {
-        setInput(prev => prev.slice(0, cursor - 1) + prev.slice(cursor))
-        setCursor(c => c - 1)
-      }
-      return
-    }
-
-    if (key.leftArrow) {
-      setCursor(c => Math.max(0, c - 1))
-      return
-    }
-
-    if (key.rightArrow) {
-      setCursor(c => Math.min(input.length, c + 1))
-      return
-    }
-
-    if (ch && !key.ctrl && !key.meta) {
-      // Pastes arrive as one chunk — flatten newlines and advance by the full length
-      const text = ch.replace(/\r\n?|\n/g, ' ')
-      setInput(prev => prev.slice(0, cursor) + text + prev.slice(cursor))
-      setCursor(c => c + text.length)
-    }
-  }, { isActive: !disabled })
-
-  if (isLoading) return null
-
-  const promptChar = multiLine ? '... ' : '> '
+/** Renders the editable prompt. All key handling lives in REPL via input/keys.ts. */
+export function Prompt({ editor, busy, dimmed = false }: Props) {
+  const t = theme()
+  const { lines, line: cursorLine, col } = cursorPosition(editor)
+  const empty = editor.text.length === 0
 
   return (
     <Box flexDirection="column">
-      {multiLine && multiLineBuffer.map((line, i) => (
-        <Box key={i}>
-          <Text dimColor>{'... '}</Text>
-          <Text>{line}</Text>
-        </Box>
-      ))}
-      <Box>
-        <Text bold color={multiLine ? 'yellow' : 'magenta'}>{promptChar}</Text>
-        <Text>
-          {input.slice(0, cursor)}
-          <Text inverse>{input[cursor] || ' '}</Text>
-          {input.slice(cursor + 1)}
-        </Text>
-      </Box>
+      {lines.map((text, i) => {
+        const prefix = i === 0 ? '> ' : '  '
+        const hasCursor = !dimmed && i === cursorLine
+        return (
+          <Box key={i}>
+            <Text color={dimmed ? t.faint : t.accent} bold>{prefix}</Text>
+            {empty && i === 0 ? (
+              <Text>
+                {!dimmed && <Text inverse> </Text>}
+                <Text color={t.faint}>
+                  {busy ? 'Type to queue a message · Esc stops Darce' : 'Ask Darce to change, fix or explain something'}
+                </Text>
+              </Text>
+            ) : hasCursor ? (
+              <Text>
+                {text.slice(0, col)}
+                <Text inverse>{text[col] ?? ' '}</Text>
+                {text.slice(col + 1)}
+              </Text>
+            ) : (
+              <Text color={dimmed ? t.faint : undefined}>{text || ' '}</Text>
+            )}
+          </Box>
+        )
+      })}
     </Box>
   )
 }

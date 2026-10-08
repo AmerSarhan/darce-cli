@@ -1,41 +1,39 @@
 import React from 'react'
 import { Box, Text } from 'ink'
 import { formatCostSummary, formatTokenCount } from '../state/costTracker.js'
-import { estimateMessagesTokens } from '../utils/tokens.js'
-import type { Message } from '../types.js'
-
-const MAX_CONTEXT_TOKENS = 100000
+import { getModelProfile } from '../config/models.js'
+import { theme } from './theme.js'
+import { homedir } from 'node:os'
 
 type Props = {
   model: string
   cwd: string
-  messages?: Message[]
+  contextTokens: number
+  hint?: string
 }
 
-export function StatusBar({ model, cwd, messages }: Props) {
-  const shortModel = model.split('/').pop() || model
-  const home = process.env.HOME || process.env.USERPROFILE || ''
-  const shortCwd = home ? cwd.replace(home, '~') : cwd
+function shortPath(cwd: string): string {
+  const home = homedir()
+  return home && cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd
+}
 
-  const ctxPercent = messages && messages.length > 0
-    ? Math.round((estimateMessagesTokens(messages) / MAX_CONTEXT_TOKENS) * 100)
-    : 0
+export function StatusBar({ model, cwd, contextTokens, hint }: Props) {
+  const t = theme()
+  const window = getModelProfile(model)?.contextWindow || 128000
+  const pct = Math.min(100, Math.round((contextTokens / window) * 100))
+  const shortModel = model.split('/').pop() || model
 
   return (
-    <Box>
-      <Text dimColor>{shortModel}</Text>
-      <Text dimColor> · </Text>
-      <Text dimColor>{formatTokenCount()} tokens</Text>
-      <Text dimColor> · </Text>
-      <Text dimColor>{formatCostSummary()}</Text>
-      {ctxPercent > 0 && (
-        <>
-          <Text dimColor> · </Text>
-          <Text dimColor color={ctxPercent > 80 ? 'yellow' : undefined}>~{ctxPercent}% ctx</Text>
-        </>
-      )}
-      <Text dimColor> · </Text>
-      <Text dimColor>{shortCwd}</Text>
+    <Box marginTop={1} flexDirection="column">
+      {hint ? <Text color={t.accent}>{hint}</Text> : null}
+      <Box>
+      <Text color={t.faint}>
+        {shortModel} · {formatTokenCount()} tokens · {formatCostSummary()}
+        {pct > 0 ? ' · ' : ''}
+      </Text>
+      {pct > 0 && <Text color={pct >= 80 ? t.warning : t.faint}>{pct}% context</Text>}
+      <Text color={t.faint} wrap="truncate-start"> · {shortPath(cwd)}</Text>
+      </Box>
     </Box>
   )
 }

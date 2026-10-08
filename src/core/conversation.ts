@@ -13,10 +13,12 @@ export function compactMessages(messages: Message[]): Message[] {
   if (messages.length <= 8) return messages
 
   const first = messages[0]!
-  const recent = messages.slice(-6)
+  const start = safeStart(messages, messages.length - 6)
+  if (start <= 1) return messages
+  const recent = messages.slice(start)
 
   // Build a summary of the middle messages
-  const middle = messages.slice(1, -6)
+  const middle = messages.slice(1, start)
   const toolCalls = middle.filter(m =>
     Array.isArray(m.content) && m.content.some(b => typeof b === 'object' && 'type' in b && (b.type === 'tool_use' || b.type === 'tool_result'))
   ).length
@@ -30,4 +32,23 @@ export function compactMessages(messages: Message[]): Message[] {
   }
 
   return [first, summary, ...recent]
+}
+
+const isToolResult = (m: Message) =>
+  Array.isArray(m.content) && m.content.some(b => typeof b === 'object' && 'type' in b && b.type === 'tool_result')
+
+/**
+ * Move a cut point back so the kept tail never starts with a tool_result whose
+ * tool_use was dropped — providers reject such histories.
+ */
+export function safeStart(messages: Message[], start: number): number {
+  let i = Math.max(0, start)
+  while (i > 0 && isToolResult(messages[i]!)) i--
+  return i
+}
+
+/** Keep roughly the last `keep` messages, cutting only at a safe boundary. */
+export function keepRecent(messages: Message[], keep: number): Message[] {
+  if (messages.length <= keep) return messages
+  return messages.slice(safeStart(messages, messages.length - keep))
 }

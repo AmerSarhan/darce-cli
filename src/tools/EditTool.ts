@@ -44,9 +44,10 @@ export const EditTool: ToolDef<typeof inputSchema, string> = {
         return { data: `Found ${matches} matches. Provide more context to make it unique, or set replace_all: true.`, isError: true }
       }
 
+      // Use a replacer function so "$&", "$1" etc. in new_string are inserted literally
       const updated = input.replace_all
-        ? content.replaceAll(input.old_string, input.new_string)
-        : content.replace(input.old_string, input.new_string)
+        ? content.split(input.old_string).join(input.new_string)
+        : content.replace(input.old_string, () => input.new_string)
 
       await writeFile(filePath, updated, 'utf-8')
       return { data: `File updated: ${input.file_path}` }

@@ -10,6 +10,6 @@ export type OpenRouterTool = {
 }
 
 export interface Provider {
-  stream(messages: Message[], model: string, tools: OpenRouterTool[]): AsyncGenerator<StreamEvent>
+  stream(messages: Message[], model: string, tools: OpenRouterTool[], signal?: AbortSignal): AsyncGenerator<StreamEvent>
   listModels(): Promise<Array<{ id: string; name: string }>>
 }

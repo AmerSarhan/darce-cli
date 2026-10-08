@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { spawn } from 'node:child_process'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
+import { safeEnv } from '../utils/env.js'
 
 const inputSchema = z.object({
   command: z.string().describe('Shell command to execute'),
@@ -24,9 +25,11 @@ export const BashTool: ToolDef<typeof inputSchema, Output> = {
     const shell = process.env.SHELL || process.env.COMSPEC || 'bash'
 
     return new Promise((resolve) => {
+      // Credentials in the user's environment are withheld unless allowed via passEnv
+      const { env } = safeEnv(process.env, context.passEnv)
       const proc = spawn(shell, ['-c', input.command], {
         cwd: context.cwd,
-        env: { ...process.env },
+        env,
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout,
       })

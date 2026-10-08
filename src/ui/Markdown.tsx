@@ -1,25 +1,33 @@
-import React from 'react'
-import { Text } from 'ink'
-import { marked } from 'marked'
-import TerminalRenderer from 'marked-terminal'
+import React, { useMemo } from 'react'
+import { Text, useWindowSize } from 'ink'
+import { Marked } from 'marked'
+import { markedTerminal } from 'marked-terminal'
 
-// Configure marked for terminal output
-marked.setOptions({
-  renderer: new TerminalRenderer({
-    reflowText: true,
-    width: process.stdout.columns ? Math.min(process.stdout.columns - 4, 120) : 80,
-  }) as any,
-})
+// One parser per terminal width — rebuilt only when the window is resized
+const parsers = new Map<number, Marked>()
 
-type Props = { text: string }
-
-export function Markdown({ text }: Props) {
-  if (!text.trim()) return null
-  try {
-    const rendered = marked.parse(text, { async: false }) as string
-    // Remove trailing newlines from marked output
-    return <Text>{rendered.replace(/\n+$/, '')}</Text>
-  } catch {
-    return <Text>{text}</Text>
+function parserFor(width: number): Marked {
+  let parser = parsers.get(width)
+  if (!parser) {
+    // Ink wraps lines itself, so marked-terminal must not reflow (double wrapping garbles output)
+    parser = new Marked().use(markedTerminal({ width, reflowText: false, tab: 2 }))
+    parsers.set(width, parser)
   }
+  return parser
+}
+
+export function renderMarkdown(text: string, width: number): string {
+  try {
+    return (parserFor(width).parse(text, { async: false }) as string).replace(/\n+$/, '')
+  } catch {
+    return text
+  }
+}
+
+export function Markdown({ text }: { text: string }) {
+  const { columns } = useWindowSize()
+  const width = Math.max(40, Math.min((columns || 80) - 2, 120))
+  const rendered = useMemo(() => (text.trim() ? renderMarkdown(text, width) : ''), [text, width])
+  if (!rendered) return null
+  return <Text>{rendered}</Text>
 }

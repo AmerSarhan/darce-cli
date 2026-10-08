@@ -66,7 +66,7 @@ export class OpenRouterProvider implements Provider {
     this.baseUrl = baseUrl || 'https://openrouter.ai/api'
   }
 
-  async *stream(messages: Message[], model: string, tools: OpenRouterTool[]): AsyncGenerator<StreamEvent> {
+  async *stream(messages: Message[], model: string, tools: OpenRouterTool[], signal?: AbortSignal): AsyncGenerator<StreamEvent> {
     yield { type: 'request_start' }
 
     const body: Record<string, unknown> = {
@@ -93,6 +93,7 @@ export class OpenRouterProvider implements Provider {
             'X-Title': 'Darce',
           },
           body: JSON.stringify(body),
+          signal,
         })
 
         if (response.status === 429 && retries < maxRetries) {
@@ -100,6 +101,7 @@ export class OpenRouterProvider implements Provider {
           const delay = Math.min(1000 * Math.pow(2, retries), 8000)
           debug(`Rate limited, retrying in ${delay}ms (attempt ${retries})`)
           await new Promise(r => setTimeout(r, delay))
+          if (signal?.aborted) return
           continue
         }
 
@@ -111,6 +113,7 @@ export class OpenRouterProvider implements Provider {
 
         break
       } catch (err) {
+        if (signal?.aborted) return
         if (retries < maxRetries) {
           retries++
           const delay = Math.min(1000 * Math.pow(2, retries), 8000)
@@ -135,7 +138,15 @@ export class OpenRouterProvider implements Provider {
 
     try {
       while (true) {
-        const { done, value } = await reader.read()
+        let readResult: ReadableStreamReadResult<Uint8Array>
+        try {
+          readResult = await reader.read()
+        } catch (err) {
+          if (signal?.aborted) return
+          yield { type: 'error', error: `Connection lost: ${(err as Error).message}` }
+          return
+        }
+        const { done, value } = readResult
         if (done) break
 
         buffer += decoder.decode(value, { stream: true })

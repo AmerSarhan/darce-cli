@@ -53,12 +53,16 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 - **Free tier** — start without a credit card or an API key.
 - **Open source** — MIT licensed.
 
-## What's New in 0.4.0
+## What's New in 0.5.0
 
-- Live model catalog from OpenRouter with a searchable picker (context, price, vision/reasoning)
-- `/model <search>` switches by name — `/model kimi`, `/model sonnet-5.5`
-- Upgraded to React 19 + Ink 8; requires Node.js 22+
-- Fixes for blank responses and input leaking into the prompt while the picker is open
+- **Stop without quitting.** Esc or Ctrl+C stops the current task immediately (including the network request). Ctrl+C twice exits.
+- **A real input editor.** Multi-line prompts (Shift+Enter, Ctrl+J, or `\` then Enter), word jumps (Alt+←/→), Ctrl+A/E/K/U/W/Y, bracketed paste that keeps newlines, and history across sessions.
+- **Type while Darce works.** Messages you send mid-task are queued and run next.
+- **Flicker-free output.** Finished output is printed once and never redrawn, so long sessions stay fast and scrollback stays clean.
+- **Safer by default.** Commands Darce runs no longer see credential-like environment variables (allow specific ones with `passEnv` in `~/.darcerc`), and known secret formats are redacted before anything is sent to a model.
+- **`darce --resume` works** — the conversation and its history come back.
+- **`darce -p "task"`** prints the result and exits, for scripts and CI.
+- Fixed: Edit corrupting replacements that contain `$&` or `$1`; tool errors now show the real reason.
 
 ## Get Started
 
@@ -86,11 +90,11 @@ Requires Node.js 22 or newer. Already installed? Update with `npm install -g dar
 ## Features
 
 ```
-/help     List commands          Ctrl+C   Cancel / Exit
-/model    Pick / search models   Up/Down  Input history
-/clear    Reset conversation     """      Multi-line mode
-/cost     Session costs
-/compact  Shrink context
+/help     List commands          Esc / Ctrl+C   Stop Darce (Ctrl+C twice exits)
+/model    Pick / search models   Shift+Enter    New line (also Ctrl+J, or \ then Enter)
+/clear    Reset conversation     Up/Down        Input history
+/cost     Session costs          Ctrl+P         Model picker
+/compact  Shrink context         Ctrl+L         Clear the screen
 ```
 
 - **7 tools** — Read, Write, Edit, Bash, Glob, Grep, WebFetch
@@ -168,6 +172,17 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 }
 ```
 
+## Safety
+
+Commands Darce runs get your environment **minus** variables that look like credentials (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `DATABASE_URL`, …). If a command needs one, allow it explicitly:
+
+```json
+// ~/.darcerc
+{ "passEnv": ["GH_TOKEN", "NPM_TOKEN"] }
+```
+
+Tool output is scanned for well-known secret formats (API keys, tokens, private keys) and redacted before it reaches a model.
+
 ## Contributing
 
 ```bash
@@ -175,7 +190,7 @@ git clone https://github.com/AmerSarhan/darce-cli.git
 cd darce-cli
 npm install
 npm run dev           # Run from source
-npm test              # 117 tests
+npm test              # 139 tests
 npm run build         # Build for production
 ```
 

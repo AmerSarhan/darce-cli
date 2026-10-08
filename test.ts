@@ -29,6 +29,13 @@ import { addUsage, getTotalCost, getTotalTokens, resetCosts, formatCostSummary, 
 import { selectModel } from './src/providers/router.js'
 import { toModelProfiles, getModels, getModelProfile } from './src/config/models.js'
 import { executeCommand } from './src/core/commands.js'
+import { editorReducer, emptyEditor, cursorPosition, type EditorState, type EditorAction } from './src/ui/input/editor.js'
+import { intentFor } from './src/ui/input/keys.js'
+import { splitStable, closeOpenFence } from './src/ui/markdownStream.js'
+import { redactSecrets } from './src/utils/redact.js'
+import { safeEnv } from './src/utils/env.js'
+import { safeStart, compactMessages } from './src/core/conversation.js'
+import { itemsFromMessages } from './src/ui/REPL.js'
 import { buildSystemPrompt, resetContext } from './src/core/context.js'
 import type { ToolContext, Message, RouterConfig } from './src/types.js'
 
@@ -843,6 +850,7 @@ async function runTests() {
   await testContextBuilder()
   await testEdgeCases()
   await testModelCatalog()
+  await testPhase0()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -917,6 +925,137 @@ async function testModelCatalog() {
     switched = ''
     executeCommand('/model someone/brand-new-model', ctx)
     return switched === 'someone/brand-new-model'
+  })
+}
+
+// ============================================================
+// Phase 0: editor, keys, streaming, safety
+// ============================================================
+
+const key = (over: Record<string, unknown> = {}) => ({
+  upArrow: false, downArrow: false, leftArrow: false, rightArrow: false, pageDown: false, pageUp: false,
+  home: false, end: false, return: false, escape: false, ctrl: false, shift: false, tab: false,
+  backspace: false, delete: false, meta: false, super: false, hyper: false, capsLock: false, numLock: false,
+  ...over,
+}) as any
+
+function run(actions: EditorAction[], start: EditorState = emptyEditor()): EditorState {
+  return actions.reduce(editorReducer, start)
+}
+
+async function testPhase0() {
+  // Editor
+  await test('Editor: insert and cursor', () => {
+    const s = run([{ type: 'insert', text: 'hello' }, { type: 'left' }, { type: 'insert', text: 'X' }])
+    return s.text === 'hellXo' && s.cursor === 5
+  })
+  await test('Editor: word motions and kill word', () => {
+    let s = run([{ type: 'insert', text: 'fix the login bug' }, { type: 'wordLeft' }])
+    if (s.cursor !== 14) return false
+    s = run([{ type: 'killWordBack' }], { ...s, cursor: s.text.length })
+    return s.text === 'fix the login ' && s.killRing === 'bug'
+  })
+  await test('Editor: Ctrl+U / Ctrl+K / yank', () => {
+    let s = run([{ type: 'insert', text: 'abc def' }, { type: 'wordLeft' }, { type: 'killToEnd' }])
+    if (s.text !== 'abc ') return false
+    s = run([{ type: 'lineStart' }, { type: 'yank' }], s)
+    return s.text === 'defabc '
+  })
+  await test('Editor: forward delete removes char under cursor', () => {
+    const s = run([{ type: 'insert', text: 'abc' }, { type: 'lineStart' }, { type: 'delete' }])
+    return s.text === 'bc' && s.cursor === 0
+  })
+  await test('Editor: multiline up/down moves within buffer', () => {
+    const s = run([{ type: 'insert', text: 'first' }, { type: 'newline' }, { type: 'insert', text: 'second' }, { type: 'up' }])
+    const pos = cursorPosition(s)
+    return pos.line === 0 && pos.col === 5 && s.historyIndex === -1
+  })
+  await test('Editor: history browse keeps the draft', () => {
+    let s = run([{ type: 'insert', text: 'draft' }], emptyEditor(['newest', 'older']))
+    s = run([{ type: 'up' }, { type: 'up' }], s)
+    if (s.text !== 'older') return false
+    s = run([{ type: 'down' }, { type: 'down' }], s)
+    return s.text === 'draft'
+  })
+  await test('Editor: commit pushes history without duplicates', () => {
+    let s = run([{ type: 'insert', text: 'same' }, { type: 'commit' }])
+    s = run([{ type: 'insert', text: 'same' }, { type: 'commit' }], s)
+    return s.history.length === 1 && s.text === ''
+  })
+  await test('Editor: paste normalizes CRLF and tabs', () => {
+    const s = run([{ type: 'insert', text: 'a\r\n\tb' }])
+    return s.text === 'a\n  b'
+  })
+
+  // Keys
+  await test('Keys: Enter submits, Shift+Enter / Ctrl+J add a newline', () =>
+    intentFor('', key({ return: true })).kind === 'submit' &&
+    (intentFor('', key({ return: true, shift: true })) as any).action?.type === 'newline' &&
+    (intentFor('\n', key()) as any).action?.type === 'newline')
+  await test('Keys: Ctrl+C is interrupt, Esc is escape', () =>
+    intentFor('c', key({ ctrl: true })).kind === 'interrupt' && intentFor('', key({ escape: true })).kind === 'escape')
+  await test('Keys: Ctrl+P opens model picker', () => intentFor('p', key({ ctrl: true })).kind === 'modelPicker')
+  await test('Keys: Alt+Left is word left', () => (intentFor('', key({ meta: true, leftArrow: true })) as any).action?.type === 'wordLeft')
+
+  // Streaming markdown
+  await test('Stream: stable prefix ends at a blank line', () => {
+    const { stable, tail } = splitStable('Para one.\n\nPara two is still')
+    return stable === 'Para one.\n\n' && tail === 'Para two is still'
+  })
+  await test('Stream: never cuts inside an open code fence', () => {
+    const { stable } = splitStable('Intro\n\n```js\nconst a = 1\n\nconst b = 2\n')
+    return stable === 'Intro\n\n'
+  })
+  await test('Stream: closed fence becomes stable', () => {
+    const { stable, tail } = splitStable('```\ncode\n```\n\nnext')
+    return stable === '```\ncode\n```\n\n' && tail === 'next'
+  })
+
+  await test('Stream: half-streamed fence is closed for display', () =>
+    closeOpenFence('```ts\nconst a') === '```ts\nconst a\n```' && closeOpenFence('done') === 'done')
+
+  // Safety
+  await test('Redact: removes known secret formats', () => {
+    const { text, count } = redactSecrets('key=sk-or-v1-' + 'a'.repeat(64) + ' aws=AKIAABCDEFGHIJKLMNOP gh=ghp_' + 'x'.repeat(36))
+    return count === 3 && !text.includes('AKIA') && text.includes('⟨redacted:aws_access_key⟩')
+  })
+  await test('Redact: leaves ordinary code alone', () => redactSecrets('const sk = skip-this; // tokenizer').count === 0)
+  await test('Env: withholds secrets unless allowed', () => {
+    const { env } = safeEnv({ PATH: '/bin', OPENAI_API_KEY: 'x', GH_TOKEN: 'y', DARCE_API_KEY: 'z', GIT_AUTHOR_NAME: 'a' }, ['GH_TOKEN'])
+    return env.PATH === '/bin' && env.GH_TOKEN === 'y' && env.GIT_AUTHOR_NAME === 'a' && !env.OPENAI_API_KEY && !env.DARCE_API_KEY
+  })
+
+  // Conversation integrity
+  const toolUse = (id: string): Message => ({ role: 'assistant', content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: 'a' } }] })
+  const toolRes = (id: string): Message => ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] })
+  await test('Compact: never starts the kept tail with an orphan tool_result', () => {
+    const msgs: Message[] = [{ role: 'user', content: 'go' }]
+    for (let i = 0; i < 8; i++) msgs.push(toolUse('t' + i), toolRes('t' + i))
+    const start = safeStart(msgs, msgs.length - 6)
+    const out = compactMessages(msgs)
+    const firstKept = out[2]!
+    return !(Array.isArray(firstKept.content) && firstKept.content[0]!.type === 'tool_result') && start % 2 === 1
+  })
+
+  // EditTool $-pattern bug
+  await test('EditTool: "$&" in new_string is inserted literally', async () => {
+    const f = join(TMP_DIR, 'dollar.txt')
+    await writeFile(f, 'price = OLD')
+    const ctx = makeCtx(TMP_DIR)
+    ctx.readFiles.add(f)
+    await EditTool.call({ file_path: f, old_string: 'OLD', new_string: "'$&' and $1" }, ctx)
+    return readFileSync(f, 'utf-8') === "price = '$&' and $1"
+  })
+
+  // Resume
+  await test('Resume: transcript rebuilt from saved messages', () => {
+    const items = itemsFromMessages([
+      { role: 'user', content: 'fix it' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Reading' }, { type: 'tool_use', id: 'x', name: 'Read', input: { file_path: 'a.ts' } }] },
+      toolRes('x'),
+      { role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
+    ])
+    return items.map(i => i.kind).join(',') === 'user,assistant,tool,assistant' && (items[2] as any).summary === 'a.ts'
   })
 }
 

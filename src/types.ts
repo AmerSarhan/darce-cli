@@ -39,8 +39,8 @@ export type StreamEvent =
   | { type: 'tool_use_delta'; id: string; json: string }
   | { type: 'tool_use_end'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'message_complete'; message: Message; usage: TokenUsage }
-  | { type: 'tool_executing'; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result_ready'; name: string; result: string; isError?: boolean }
+  | { type: 'tool_executing'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result_ready'; id: string; name: string; result: string; isError?: boolean; durationMs: number }
   | { type: 'error'; error: string }
 
 export type SpinnerMode = 'idle' | 'requesting' | 'thinking' | 'responding' | 'tool-input' | 'tool-use'
@@ -64,6 +64,7 @@ export type ToolContext = {
   cwd: string
   readFiles: Set<string>
   abortSignal?: AbortSignal
+  passEnv?: string[]
 }
 
 // === Config Types ===
@@ -87,6 +88,8 @@ export type DarceConfig = {
   shell: string
   maxTurns: number
   historyPath: string
+  /** Environment variables Bash may see even though they look like secrets */
+  passEnv?: string[]
 }
 
 // === Model Info ===
