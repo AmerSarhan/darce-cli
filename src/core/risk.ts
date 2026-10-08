@@ -153,8 +153,14 @@ export function toolRisk(name: string, input: Record<string, unknown>, cwd: stri
     case 'Glob':
     case 'Grep':
       return { level: 0, reason: 'read-only' }
+    case 'Skill':
+    case 'Plan':
+    case 'Remember':
+      return { level: 0, reason: 'read-only' }
     case 'WebFetch':
-      return { level: 1, reason: 'fetches a web page (untrusted content)' }
+    case 'WebSearch':
+    case 'StealthFetch':
+      return { level: 1, reason: 'reads from the web (untrusted content)' }
     case 'Edit':
     case 'Write': {
       const p = String(input.file_path ?? '')

@@ -30,7 +30,7 @@ const COMMANDS: SlashCommand[] = [
   {
     name: 'model',
     aliases: ['m'],
-    description: 'Open the model picker, or /model <search> to switch',
+    description: 'Pick a model, or search and switch directly',
     execute: (args, context) => {
       const models = getModels()
       const query = args.trim().toLowerCase()
@@ -59,7 +59,7 @@ const COMMANDS: SlashCommand[] = [
   {
     name: 'undo',
     aliases: ['u'],
-    description: 'Undo the last change Darce made (files and shell effects)',
+    description: 'Undo Darce\'s last change, including shell effects',
     execute: () => '__UNDO__',
   },
   {
@@ -68,28 +68,63 @@ const COMMANDS: SlashCommand[] = [
     execute: () => '__DIFF__',
   },
   {
+    name: 'login',
+    description: 'Sign in with your browser (adds or switches account)',
+    execute: () => '__LOGIN__',
+  },
+  {
+    name: 'account',
+    description: 'Your plan and usage; switch between saved accounts',
+    execute: (args) => `__ACCOUNT__:${args.trim()}`,
+  },
+  {
+    name: 'logout',
+    description: 'Sign out of the current account',
+    execute: () => '__LOGOUT__',
+  },
+  {
+    name: 'memory',
+    description: 'What Darce remembers about you and this project',
+    execute: (args) => `__MEMORY__:${args.trim()}`,
+  },
+  {
+    name: 'skills',
+    description: 'Skills Darce can load',
+    execute: () => '__SKILLS__',
+  },
+  {
+    name: 'security',
+    description: 'Security review of the project, or just your changes',
+    execute: (args) => `__SECURITY__:${args.trim()}`,
+  },
+  {
+    name: 'learn',
+    description: 'Darce explains the concepts behind each change',
+    execute: (args) => `__LEARN__:${args.trim().toLowerCase()}`,
+  },
+  {
     name: 'upgrade',
-    description: 'Upgrade your plan: /upgrade builder ($15/mo) or /upgrade power ($65/mo)',
+    description: 'Upgrade: Builder $15/mo or Power $65/mo',
     execute: (args) => `__UPGRADE__:${args.trim().toLowerCase()}`,
   },
   {
     name: 'rewind',
-    description: 'Scrub through every change and rewind files + conversation (or press Esc twice)',
+    description: 'Scrub through changes and rewind (also Esc Esc)',
     execute: () => '__REWIND__',
   },
   {
     name: 'derby',
-    description: 'Race models on a task in separate worktrees, then apply the best result: /derby [--models a,b,c] <task>',
+    description: 'Race models on a task, apply the best result',
     execute: (args) => `__DERBY__:${args}`,
   },
   {
     name: 'critic',
-    description: 'Second opinion: a model from another vendor reviews each edit (/critic on|off [model])',
+    description: 'Another vendor\'s model reviews every edit',
     execute: (args) => `__CRITIC__:${args.trim()}`,
   },
   {
     name: 'mode',
-    description: 'Approval mode: auto, ask, plan (read-only) or full (Shift+Tab cycles)',
+    description: 'Approval mode (Shift+Tab cycles)',
     execute: (args) => `__MODE__:${args.trim().toLowerCase()}`,
   },
   {
@@ -138,4 +173,14 @@ export function executeCommand(input: string, context: CommandContext): string |
   const cmd = COMMANDS.find(c => c.name === name || c.aliases?.includes(name!))
   if (!cmd) return `Unknown command: /${name}. Type /help for available commands.`
   return cmd.execute(args, context)
+}
+
+/** Argument hints shown in the slash menu for commands that take input. */
+const ARG_HINTS: Record<string, string> = {
+  model: '[search]', derby: '<task>', critic: 'on|off', mode: 'auto|ask|plan|full', upgrade: 'builder|power',
+  memory: '[forget <text>]', account: '[switch <email>]', security: '[changes]', learn: 'on|off',
+}
+
+export function listCommands(): Array<{ name: string; aliases: string[]; description: string; args?: string }> {
+  return COMMANDS.map(c => ({ name: c.name, aliases: c.aliases ?? [], description: c.description, args: ARG_HINTS[c.name] }))
 }

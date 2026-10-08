@@ -43,6 +43,12 @@ import { execSync } from 'node:child_process'
 import { shiftGear, priceNote, DEFAULT_GEARS } from './src/config/gears.js'
 import { Derby, defaultRacers } from './src/core/derby.js'
 import { pickCritic } from './src/core/critic.js'
+import { fuzzyScore, completionContext, rank } from './src/ui/input/complete.js'
+import { parseDuckDuckGo } from './src/tools/WebSearchTool.js'
+import { htmlToMarkdown, looksBlocked } from './src/web/html.js'
+import { discoverSkills, loadSkill, resetSkills } from './src/core/skills.js'
+import { remember, readMemory, forget } from './src/core/memory.js'
+import { listCommands } from './src/core/commands.js'
 import { buildSystemPrompt, resetContext } from './src/core/context.js'
 import type { ToolContext, Message, RouterConfig } from './src/types.js'
 
@@ -123,8 +129,8 @@ async function testRegistry() {
   // Ensure tools are registered
   registerAllTools()
 
-  await test('Registry: 7 tools registered', () => {
-    return allTools().length === 7
+  await test('Registry: core tools registered (11, plus StealthFetch when configured)', () => {
+    return allTools().length >= 11
   })
 
   await test('Registry: all expected tool names present', () => {
@@ -165,8 +171,8 @@ async function testRegistry() {
 async function testJSONSchemas() {
   registerAllTools()
 
-  await test('Schemas: toAPITools returns 7 entries', () => {
-    return toAPITools().length === 7
+  await test('Schemas: toAPITools returns one entry per tool', () => {
+    return toAPITools().length === allTools().length
   })
 
   await test('Schemas: every schema has type=function', () => {
@@ -531,9 +537,9 @@ async function testWebFetchTool() {
     return result.data.body.length > 0
   })
 
-  await test('WebFetchTool: captures headers', async () => {
-    const result = await WebFetchTool.call({ url: 'https://httpbin.org/get' }, ctx)
-    return Object.keys(result.data.headers).length > 0
+  await test('WebFetchTool: HTML pages come back as markdown', async () => {
+    const result = await WebFetchTool.call({ url: 'https://example.com' }, ctx)
+    return result.data.status === 200 && !result.data.body.includes('<html') && /Example Domain/.test(result.data.title ?? result.data.body)
   })
 
   await test('WebFetchTool: invalid URL returns error', async () => {
@@ -781,7 +787,7 @@ async function testContextBuilder() {
 
   await test('Context: includes guidelines', () => {
     const prompt = buildSystemPrompt(process.cwd())
-    return prompt.includes('Guidelines')
+    return prompt.includes('How you work') && prompt.includes('Engineering standards')
   })
 
   await test('Context: caching works (same string returned)', () => {
@@ -860,6 +866,7 @@ async function runTests() {
   await testPhase0()
   await testPhase1()
   await testPhase2()
+  await testBrain()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -1175,6 +1182,75 @@ async function testPhase2() {
     const worktrees = execSync('git worktree list', { cwd: repo, encoding: 'utf-8' }).trim().split('\n').length
     return untouched && bothDone && applied && worktrees === 1
   })
+}
+
+// ============================================================
+// v0.8: brain, skills, memory, web, completion
+// ============================================================
+
+async function testBrain() {
+  await test('Complete: slash at start gives command context', () => {
+    const c = completionContext({ ...emptyEditor(), text: '/de', cursor: 3 })
+    return c?.kind === 'command' && c.query === 'de'
+  })
+  await test('Complete: @mention anywhere gives file context', () => {
+    const c = completionContext({ ...emptyEditor(), text: 'look at @src/ap please', cursor: 15 })
+    return c?.kind === 'file' && c.query === 'src/ap' && c.start === 8
+  })
+  await test('Complete: fuzzy ranks prefix and basename matches first', () => {
+    const files = ['docs/repl-notes.md', 'src/ui/REPL.tsx', 'src/core/query.ts']
+    const ranked = rank(files, 'repl', f => f)
+    return ranked.length === 2 && !ranked.includes('src/core/query.ts') && fuzzyScore('rpl', 'src/ui/REPL.tsx') > 0 && fuzzyScore('zzz', 'abc') === -1
+  })
+  await test('Complete: every command is listed with a description', () => {
+    const cmds = listCommands()
+    return cmds.length >= 15 && cmds.every(c => c.description) && cmds.some(c => c.name === 'derby' && c.args === '<task>')
+  })
+
+  await test('Skills: built-ins are available and loadable', () => {
+    resetSkills()
+    const names = discoverSkills(TMP_DIR).map(s => s.name)
+    return ['ui-craft', 'security-review', 'teach', 'web-research'].every(n => names.includes(n)) && !!loadSkill(TMP_DIR, 'security-review')?.body.includes('IDOR')
+  })
+  await test('Skills: project SKILL.md is discovered and overrides by name', () => {
+    const dir = join(TMP_DIR, 'skillproj', '.darce', 'skills', 'deploy')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: deploy\ndescription: >-\n  How we deploy\n  this app\n---\nRun make ship.')
+    const over = join(TMP_DIR, 'skillproj', '.darce', 'skills', 'ui-craft')
+    mkdirSync(over, { recursive: true })
+    writeFileSync(join(over, 'SKILL.md'), '---\nname: ui-craft\ndescription: Our own UI rules\n---\nUse the design system.')
+    resetSkills()
+    const skills = discoverSkills(join(TMP_DIR, 'skillproj'))
+    const deploy = skills.find(s => s.name === 'deploy')
+    const ui = skills.find(s => s.name === 'ui-craft')
+    return deploy?.description === 'How we deploy this app' && ui?.source === 'project' && loadSkill(join(TMP_DIR, 'skillproj'), 'deploy')?.body === 'Run make ship.'
+  })
+
+  await test('Memory: remember, dedupe and forget (isolated home)', () => {
+    const realHome = process.env.HOME
+    process.env.HOME = join(TMP_DIR, 'home')
+    try {
+      const a = remember('user', TMP_DIR, 'Prefers pnpm over npm')
+      const b = remember('user', TMP_DIR, 'prefers pnpm over npm')
+      const c = remember('project', TMP_DIR, 'Deploys with railway up')
+      const has = readMemory('user', TMP_DIR).includes('Prefers pnpm') && readMemory('project', TMP_DIR).includes('railway up')
+      const removed = forget('user', TMP_DIR, 'pnpm')
+      return a.added && !b.added && c.added && has && removed === 1 && !readMemory('user', TMP_DIR).includes('pnpm')
+    } finally {
+      process.env.HOME = realHome
+    }
+  })
+
+  await test('Web: DuckDuckGo results parse into title, url, snippet', () => {
+    const html = '<div class="result results_links"><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fink.dev%2Fdocs&amp;rut=x">Ink <b>docs</b></a><a class="result__snippet" href="#">React for &amp; CLIs</a></div>'
+    const r = parseDuckDuckGo(html)
+    return r.length === 1 && r[0]!.url === 'https://ink.dev/docs' && r[0]!.title === 'Ink docs' && r[0]!.snippet === 'React for & CLIs'
+  })
+  await test('Web: HTML becomes markdown without scripts', () => {
+    const { title, markdown } = htmlToMarkdown('<html><head><title>T</title><script>evil()</script></head><body><main><h1>Hello</h1><p>See <a href="/docs">docs</a></p></main></body></html>', 'https://x.dev/page')
+    return title === 'T' && markdown.includes('# Hello') && markdown.includes('(https://x.dev/docs)') && !markdown.includes('evil')
+  })
+  await test('Web: bot walls are detected', () => looksBlocked(403, '') && looksBlocked(200, '<title>Just a moment...</title>') && !looksBlocked(200, '<h1>Docs</h1>'))
 }
 
 runTests().catch(err => {

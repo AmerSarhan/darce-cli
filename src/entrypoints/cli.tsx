@@ -16,7 +16,7 @@ if (args.includes('--help') || args.includes('-h')) {
     darce                           Interactive REPL
     darce "fix the login bug"       Start with a prompt
     darce --model <id>              Override model
-    darce login                     Create a free account or sign in
+    darce login                     Sign in with your browser (or create an account)
     darce upgrade                   Upgrade to Builder or Power
     darce logout                    Remove saved credentials
     darce --resume, -r              Resume last session
@@ -98,16 +98,11 @@ async function authFlow() {
 }
 
 async function logoutFlow() {
-  const { existsSync, unlinkSync } = await import('node:fs')
-  const { join } = await import('node:path')
-  const { homedir } = await import('node:os')
-  const rcPath = join(homedir(), '.darcerc')
-  if (existsSync(rcPath)) {
-    unlinkSync(rcPath)
-    console.log('\n  Logged out. ~/.darcerc removed.\n')
-  } else {
-    console.log('\n  Not logged in.\n')
-  }
+  const { removeAccount } = await import('../auth/accounts.js')
+  const r = removeAccount()
+  console.log(r.nowActive
+    ? `\n  Signed out${r.removed ? ` of ${r.removed}` : ''}. Now using ${r.nowActive.email}.\n`
+    : '\n  Signed out. Run `darce login` to sign in again. Your other settings in ~/.darcerc were kept.\n')
   process.exit(0)
 }
 

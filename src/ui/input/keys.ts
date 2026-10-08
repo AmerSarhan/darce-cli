@@ -11,6 +11,7 @@ export type InputIntent =
   | { kind: 'cycleMode' }
   | { kind: 'expand' }
   | { kind: 'gear'; dir: 1 | -1 }
+  | { kind: 'historySearch' }
   | { kind: 'none' }
 
 const edit = (action: EditorAction): InputIntent => ({ kind: 'edit', action })
@@ -42,6 +43,7 @@ export function intentFor(input: string, key: Key): InputIntent {
       case 'h': return edit({ type: 'backspace' })
       case 'l': return { kind: 'clearScreen' }
       case 'o': return { kind: 'expand' }
+      case 'r': return { kind: 'historySearch' }
       case 'p':
       case 'm': return { kind: 'modelPicker' }
     }

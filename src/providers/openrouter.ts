@@ -66,6 +66,12 @@ export class OpenRouterProvider implements Provider {
     this.baseUrl = baseUrl || 'https://openrouter.ai/api'
   }
 
+  /** Switch accounts without restarting. */
+  setCredentials(apiKey: string, baseUrl?: string) {
+    this.apiKey = apiKey
+    if (baseUrl) this.baseUrl = baseUrl
+  }
+
   async *stream(messages: Message[], model: string, tools: OpenRouterTool[], signal?: AbortSignal): AsyncGenerator<StreamEvent> {
     yield { type: 'request_start' }
 

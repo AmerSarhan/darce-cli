@@ -14,6 +14,7 @@ type Props = {
   tainted?: boolean
   gear?: { index: number; total: number }
   critic?: boolean
+  learn?: boolean
 }
 
 function shortPath(cwd: string): string {
@@ -23,7 +24,7 @@ function shortPath(cwd: string): string {
   return parts.length > 3 ? `…/${parts.slice(-2).join('/')}` : p
 }
 
-export function StatusBar({ model, cwd, contextTokens, hint, mode = 'auto', tainted = false, gear, critic = false }: Props) {
+export function StatusBar({ model, cwd, contextTokens, hint, mode = 'auto', tainted = false, gear, critic = false, learn = false }: Props) {
   const t = theme()
   const window = getModelProfile(model)?.contextWindow || 128000
   const pct = Math.min(100, Math.round((contextTokens / window) * 100))
@@ -37,7 +38,7 @@ export function StatusBar({ model, cwd, contextTokens, hint, mode = 'auto', tain
         {tainted ? <Text color={t.warning}> · web content</Text> : null}
         <Text color={t.faint}> · </Text>
         {gear && gear.index >= 0 ? <Text color={t.accent}>{'▮'.repeat(gear.index + 1)}<Text color={t.faint}>{'▯'.repeat(gear.total - gear.index - 1)}</Text> </Text> : null}
-        <Text color={t.faint}>{shortModel}{critic ? ' + critic' : ''} · {formatTokenCount()} tokens · {formatCostSummary()}</Text>
+        <Text color={t.faint}>{shortModel}{critic ? ' + critic' : ''}{learn ? ' · learn' : ''} · {formatTokenCount()} tokens · {formatCostSummary()}</Text>
         {pct > 0 ? <Text color={pct >= 80 ? t.warning : t.faint}> · {pct}% context</Text> : null}
         <Text color={t.faint}> · {shortPath(cwd)}</Text>
       </Text>

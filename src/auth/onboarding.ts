@@ -1,6 +1,8 @@
 import { writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { addAccount } from './accounts.js'
+import { browserLogin } from './browserLogin.js'
 
 const API_BASE = process.env.DARCE_API_BASE || 'https://api.darce.dev'
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -76,7 +78,8 @@ async function callAuth(endpoint: 'login' | 'register', email: string, password:
   }
 }
 
-export function saveCredentials(apiKey: string) {
+export function saveCredentials(apiKey: string, email = '') {
+  if (email) { addAccount(email, apiKey, API_BASE); return }
   const rcPath = join(homedir(), '.darcerc')
   let existing: Record<string, unknown> = {}
   try {
@@ -90,10 +93,12 @@ export function saveCredentials(apiKey: string) {
   writeFileSync(rcPath, JSON.stringify(existing, null, 2) + '\n', { mode: 0o600 })
 }
 
+let lastEmail = ''
+
 async function askEmail(ask: (q: string) => Promise<string>): Promise<string | null> {
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     const email = await ask('  Email: ')
-    if (EMAIL_RE.test(email)) return email
+    if (EMAIL_RE.test(email)) { lastEmail = email; return email }
     console.log("  That doesn't look like an email address. Try again.\n")
   }
   return null
@@ -140,6 +145,7 @@ async function signIn(p: ReturnType<typeof createPrompter>, presetEmail?: string
       const again = await p.ask(`  Email [${email}]: `)
       if (again) email = again
     }
+    lastEmail = email
     const password = await p.askSecret('  Password: ')
 
     console.log('\n  Signing in...')
@@ -172,24 +178,40 @@ export async function onboard(mode: 'choose' | 'signin' = 'choose'): Promise<str
 
   const p = createPrompter()
   try {
-    let choice = mode === 'signin' ? '2' : ''
+    let choice = mode === 'signin' ? '3' : ''
     if (!choice) {
       console.log('\n  Welcome to Darce — an AI coding agent for your terminal.\n')
-      console.log('    1) Create a free account   (25 requests/month, no card needed)')
-      console.log('    2) Sign in to an existing account\n')
-      choice = await p.ask('  Choose 1 or 2 [1]: ')
+      console.log('    1) Sign in with your browser        (recommended)')
+      console.log('    2) Create a free account here       (25 requests/month, no card needed)')
+      console.log('    3) Sign in here with email and password\n')
+      choice = await p.ask('  Choose 1, 2 or 3 [1]: ')
       console.log()
     }
 
-    let apiKey: string | null
-    if (choice === '2') {
-      apiKey = await signIn(p)
-    } else {
+    let apiKey: string | null = null
+    let email = ''
+    if (choice === '' || choice === '1') {
+      console.log('  Opening cli.darce.dev in your browser…')
+      try {
+        const r = await browserLogin({ onUrl: url => console.log(`  If it didn't open, visit:\n  ${url}\n\n  Waiting for you to sign in (Ctrl+C to cancel)…`) })
+        apiKey = r.apiKey
+        email = r.email
+        console.log(`\n  Signed in as ${email}.\n`)
+      } catch (err) {
+        console.log(`\n  ${(err as Error).message} Falling back to signing in here.\n`)
+        choice = '3'
+      }
+    }
+    if (!apiKey && choice === '3') {
+      const r = await signIn(p)
+      apiKey = r
+    } else if (!apiKey && choice === '2') {
       const result = await signUp(p)
       apiKey = typeof result === 'object' && result ? await signIn(p, result.signinEmail) : result
     }
+    if (apiKey && !email) email = lastEmail
 
-    if (apiKey) saveCredentials(apiKey)
+    if (apiKey) saveCredentials(apiKey, email)
     return apiKey
   } finally {
     p.close()

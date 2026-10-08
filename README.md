@@ -53,6 +53,17 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 - **Free tier** — start without a credit card or an API key.
 - **Open source** — MIT licensed.
 
+## What's New in 0.8.0
+
+- **A much smarter brain.** Darce now works like a senior engineer: understand → plan → change → verify, with a live **plan checklist** you can watch. It reads your project's `AGENTS.md` / `CLAUDE.md` / `.cursorrules`, gets a quick overview of your stack and scripts, and follows built-in engineering standards (proof over assurances, no surprise deploys, no AI attribution in commits).
+- **Skills — any skill.** Drop a `SKILL.md` into `~/.darce/skills/<name>/` or `.darce/skills/` and Darce loads it when a task matches. Your existing Claude Code skills (`~/.claude/skills`, plugin skills) work as-is. Built in: `ui-craft` (how to build interfaces that don't look generated), `security-review`, `teach`, `web-research`. See them with `/skills`.
+- **Memory.** Darce remembers your preferences and project facts across sessions when you correct it or tell it something. `/memory` shows what it knows; edit or `/memory forget` anything.
+- **Web search and stealth browsing.** `WebSearch` finds current docs and answers; `WebFetch` now returns clean markdown and retries blocked pages in a stealth browser (with a Scrapify endpoint configured).
+- **Security advisor.** `/security` reviews the whole project (or `/security changes` for just your diff) and reports exploitable issues by severity, with proof and fixes.
+- **Learn mode.** `/learn on` and Darce explains the concepts behind each change and checks your understanding.
+- **Slash menu and @files.** Type `/` to see every command; type `@` to fuzzy-find a file and attach it to your message. Ctrl+R searches your prompt history.
+- **Accounts.** `/login` signs in through your browser; `/account` shows your plan and usage and switches between saved accounts; `/logout` signs out.
+
 ## What's New in 0.7.0
 
 Things no other terminal agent does:
@@ -191,6 +202,11 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 | `/rewind` | Scrub through every change and rewind files + conversation (also Esc twice) |
 | `/derby [--models a,b,c] <task>` | Race models on a task in separate worktrees and apply the best |
 | `/critic on\|off [model]` | Second-opinion review of every edit by another vendor's model |
+| `/security [changes]` | Security review of the project or your uncommitted changes |
+| `/learn on\|off` | Darce explains the concepts behind each change |
+| `/skills` | List available skills |
+| `/memory [forget <text>]` | What Darce remembers about you and this project |
+| `/login`, `/account`, `/logout` | Browser sign-in, plan and usage, switch accounts |
 | `/quit` | Exit (`/q` alias) |
 
 ## Config
@@ -240,6 +256,21 @@ Commands Darce runs get your environment **minus** variables that look like cred
 
 Tool output is scanned for well-known secret formats (API keys, tokens, private keys) and redacted before it reaches a model.
 
+## Skills
+
+A skill is a folder with a `SKILL.md`:
+
+```markdown
+---
+name: deploy
+description: How this team deploys the API. Use when asked to ship or release.
+---
+1. Run `make test`.
+2. ...
+```
+
+Darce looks in `.darce/skills/` and `.claude/skills/` (project), then `~/.darce/skills/`, `~/.claude/skills/` and installed Claude Code plugins. Project skills override user skills, which override built-ins.
+
 ## Configuration
 
 ```json
@@ -250,7 +281,8 @@ Tool output is scanned for well-known secret formats (API keys, tokens, private 
   "critic": false,
   "criticModel": "anthropic/claude-haiku-5.5",
   "derbyModels": ["anthropic/claude-sonnet-5.5", "openai/gpt-5.6-sol", "google/gemini-3.1-pro-preview"],
-  "passEnv": ["GH_TOKEN"]
+  "passEnv": ["GH_TOKEN"],
+  "scrapify": { "url": "https://your-scrapify-host", "token": "…" }
 }
 ```
 
@@ -261,7 +293,7 @@ git clone https://github.com/AmerSarhan/darce-cli.git
 cd darce-cli
 npm install
 npm run dev           # Run from source
-npm test              # 169 tests
+npm test              # 179 tests
 npm run build         # Build for production
 ```
 

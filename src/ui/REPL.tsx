@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useReducer, useEffect } from 'react'
+import React, { useState, useCallback, useRef, useReducer, useEffect, useMemo } from 'react'
 import { Box, Static, Text, useInput, usePaste, useApp, useStdout } from 'ink'
 import { homedir } from 'node:os'
 import { Prompt } from './Prompt.js'
@@ -34,10 +34,22 @@ import { resolve as resolvePath } from 'node:path'
 import { Receipt, type ReceiptData } from './Receipt.js'
 import { Tape } from './Tape.js'
 import { DerbyBoard } from './DerbyBoard.js'
+import { PlanPanel } from './PlanPanel.js'
+import type { PlanDisplay } from '../types.js'
 import { Derby, defaultRacers } from '../core/derby.js'
 import { pickCritic, reviewEdit } from '../core/critic.js'
 import { DEFAULT_GEARS, gearIndex, shiftGear, priceNote } from '../config/gears.js'
 import { createCheckout, openInBrowser } from '../core/billing.js'
+import { readMemory, memoryPath, forget } from '../core/memory.js'
+import { listAccounts, addAccount, switchAccount, removeAccount, fetchAccount } from '../auth/accounts.js'
+import { browserLogin } from '../auth/browserLogin.js'
+import { discoverSkills } from '../core/skills.js'
+import { resetContext } from '../core/context.js'
+import { completionContext, rank } from './input/complete.js'
+import { projectFiles } from './input/files.js'
+import { CompletionMenu, type MenuItem } from './CompletionMenu.js'
+import { listCommands } from '../core/commands.js'
+import { readFileSync, existsSync, statSync } from 'node:fs'
 import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
 import type { FileDiff } from '../utils/diff.js'
 
@@ -129,6 +141,38 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [derby, setDerby] = useState<{ d: Derby; task: string; selected: number; finished: boolean } | null>(null)
   const [, setDerbyTick] = useState(0)
   const [criticOn, setCriticOn] = useState(!!state.config.critic)
+  const [livePlan, setLivePlan] = useState<PlanDisplay | null>(null)
+  const [learnOn, setLearnOn] = useState(false)
+  const [menuIndex, setMenuIndex] = useState(0)
+  const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
+  const [search, setSearch] = useState<{ query: string; skip: number } | null>(null)
+
+  useEffect(() => { projectFiles(state.cwd) }, [state.cwd])
+
+  // Slash-command and @file suggestions for whatever is at the cursor
+  const completion = useMemo(() => {
+    if (menuDismissed === editor.text) return null
+    const ctx = completionContext(editor)
+    if (!ctx) return null
+    if (ctx.kind === 'command') {
+      const cmds = listCommands()
+      const ranked = ctx.query ? rank(cmds, ctx.query, c => [c.name, ...c.aliases].join(' '), 10) : cmds.slice(0, 12)
+      if (ranked.length === 1 && ranked[0]!.name === ctx.query && !ranked[0]!.args) return null
+      return { ctx, items: ranked.map(c => ({ label: `/${c.name}`, hint: c.args, detail: c.description, value: `/${c.name}`, args: !!c.args })) }
+    }
+    const files = rank(projectFiles(state.cwd), ctx.query, f => f, 8)
+    return files.length ? { ctx, items: files.map(f => ({ label: f, value: `@${f}`, args: false })) } : null
+  }, [editor, menuDismissed, state.cwd])
+
+  useEffect(() => { setMenuIndex(0) }, [completion?.ctx.kind, completion?.ctx.query])
+
+  const historyMatches = useMemo(() => {
+    if (!search) return []
+    const q = search.query.toLowerCase()
+    return editor.history.filter(h => h.toLowerCase().includes(q))
+  }, [search, editor.history])
+  const learnRef = useRef(false)
+  learnRef.current = learnOn
   const lastEsc = useRef(0)
   const [tainted, setTainted] = useState(false)
 
@@ -163,6 +207,25 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (state.modelOverride) modelRef.current = state.modelOverride
   }, [state.modelOverride])
 
+  // @path mentions attach the file's contents to the message sent to the model
+  const attachMentions = useCallback((text: string): string => {
+    let budget = 60_000
+    const parts: string[] = []
+    for (const m of text.matchAll(/(?:^|\s)@([^\s@]+)/g)) {
+      const rel = m[1]!
+      const abs = resolvePath(state.cwd, rel)
+      try {
+        if (!existsSync(abs) || !statSync(abs).isFile() || budget <= 0) continue
+        let body = readFileSync(abs, 'utf-8')
+        if (body.length > Math.min(30_000, budget)) body = body.slice(0, Math.min(30_000, budget)) + '\n…(truncated)'
+        budget -= body.length
+        readFilesRef.current.add(abs)
+        parts.push(`<file path="${rel}">\n${body}\n</file>`)
+      } catch {}
+    }
+    return parts.length ? `\n\nFiles the user attached:\n${parts.join('\n')}` : ''
+  }, [state.cwd])
+
   const flashHint = useCallback((text: string, ms = 2000) => {
     setHint(text)
     if (hintTimer.current) clearTimeout(hintTimer.current)
@@ -175,12 +238,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setStaticKey(k => k + 1)
   }, [write, banner])
 
-  const runQuery = useCallback(async (text: string) => {
+  const runQuery = useCallback(async (text: string, attachments = '') => {
     setBusy(true)
     commit({ kind: 'user', id: newId(), text })
     // Notes about things the user did between turns (e.g. /undo) ride along with the next message
     const notes = notesRef.current.splice(0)
-    const content = notes.length ? `${notes.map(n => `[Note from Darce: ${n}]`).join('\n')}\n\n${text}` : text
+    if (learnRef.current) notes.push('learn mode is on: load the teach skill and follow it for this task')
+    const content = (notes.length ? `${notes.map(n => `[Note from Darce: ${n}]`).join('\n')}\n\n${text}` : text) + attachments
     messagesRef.current = [...messagesRef.current, { role: 'user', content }]
 
     const controller = new AbortController()
@@ -304,6 +368,12 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             break
           }
           case 'tool_result_ready': {
+            // The plan is shown as a live checklist, not as a tool line
+            if (event.display?.kind === 'plan') {
+              setLivePlan(event.display)
+              setActivity({ label: 'Thinking', startedAt: Date.now() })
+              break
+            }
             const summary = summaries.get(event.id) ?? ''
             const filePath = ['Read', 'Edit', 'Write'].includes(event.name) && summary ? resolvePath(state.cwd, summary) : undefined
             commit({
@@ -337,7 +407,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
                 })
               }
             }
-            if (event.name === 'WebFetch' && !event.isError) {
+            if (['WebFetch', 'WebSearch', 'StealthFetch'].includes(event.name) && !event.isError) {
               taintedRef.current = true
               setTainted(true)
             }
@@ -367,6 +437,10 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       setTitle('darce')
       setProgress('off')
       if (took >= 20_000) notify('Darce finished', text.split('\n')[0]!.slice(0, 80))
+      setLivePlan(prev => {
+        if (prev) commit({ kind: 'plan', id: newId(), plan: prev })
+        return null
+      })
       if (steps > 0) {
         receipt.files = [...fileStats.values()]
         receipt.tokens = getTotalTokens() - tokensBefore
@@ -505,6 +579,101 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       return
     }
     if (result === '__REWIND__') { openTape(); return }
+    const useAccount = (apiKey: string, apiBase?: string) => {
+      provider.setCredentials?.(apiKey, apiBase)
+      setState(prev => ({ ...prev, config: { ...prev.config, apiKey, apiBase: apiBase ?? prev.config.apiBase } }))
+    }
+    const describe = async (apiKey: string, apiBase?: string) => {
+      const info = await fetchAccount(apiKey, apiBase)
+      if (!info) return ''
+      const limit = typeof info.daily_limit === 'string' ? 'unlimited' : `${info.daily_requests}/${info.daily_limit} requests used`
+      const plan = info.tier === 'free' ? 'Starter (free)' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
+      return `${plan} plan · ${limit}`
+    }
+    if (result === '__LOGIN__') {
+      commit({ kind: 'user', id: newId(), text })
+      commit({ kind: 'system', id: newId(), text: 'Opening cli.darce.dev in your browser to sign in…' })
+      void browserLogin({ onUrl: url => commit({ kind: 'system', id: newId(), text: `If it didn't open, visit:\n${url}` }) })
+        .then(async r => {
+          const acct = addAccount(r.email, r.apiKey, state.config.apiBase || undefined)
+          useAccount(acct.apiKey, acct.apiBase)
+          commit({ kind: 'system', id: newId(), text: `Signed in as ${acct.email}. ${await describe(acct.apiKey, acct.apiBase)}` })
+        })
+        .catch(err => commit({ kind: 'error', id: newId(), text: (err as Error).message }))
+      return
+    }
+    if (result === '__LOGOUT__') {
+      commit({ kind: 'user', id: newId(), text })
+      const r = removeAccount()
+      if (r.nowActive) {
+        useAccount(r.nowActive.apiKey, r.nowActive.apiBase)
+        commit({ kind: 'system', id: newId(), text: `Signed out${r.removed ? ` of ${r.removed}` : ''}. Now using ${r.nowActive.email}.` })
+      } else {
+        useAccount('')
+        commit({ kind: 'system', id: newId(), text: 'Signed out. Run /login to sign in again.' })
+      }
+      return
+    }
+    if (result?.startsWith('__ACCOUNT__:')) {
+      commit({ kind: 'user', id: newId(), text })
+      const arg = result.slice(12)
+      if (arg.startsWith('switch')) {
+        const who = arg.slice(6).trim()
+        const acct = who ? switchAccount(who) : null
+        if (!acct) { commit({ kind: 'system', id: newId(), text: who ? `No saved account matches "${who}". Use /login to add one.` : 'Usage: /account switch <email>' }); return }
+        useAccount(acct.apiKey, acct.apiBase)
+        void describe(acct.apiKey, acct.apiBase).then(d => commit({ kind: 'system', id: newId(), text: `Switched to ${acct.email}. ${d}` }))
+        return
+      }
+      const { active, accounts } = listAccounts()
+      void describe(state.config.apiKey, state.config.apiBase || undefined).then(d => {
+        const lines = [
+          active ? `Signed in as ${active}${d ? ` — ${d}` : ''}` : `Signed in${d ? ` — ${d}` : ' (account details unavailable)'}`,
+          accounts.length > 1 ? `\nSaved accounts:\n${accounts.map(a => `  ${a.email === active ? '●' : '○'} ${a.email}`).join('\n')}\nSwitch with /account switch <email>.` : '',
+          '\n/login adds another account · /logout signs out · /upgrade changes your plan · dashboard: https://cli.darce.dev/dashboard',
+        ]
+        commit({ kind: 'system', id: newId(), text: lines.filter(Boolean).join('\n') })
+      })
+      return
+    }
+    if (result?.startsWith('__MEMORY__:')) {
+      commit({ kind: 'user', id: newId(), text })
+      const arg = result.slice(11)
+      if (arg.startsWith('forget ')) {
+        const what = arg.slice(7)
+        const n = forget('user', state.cwd, what) + forget('project', state.cwd, what)
+        resetContext()
+        commit({ kind: 'system', id: newId(), text: n ? `Forgot ${n} note${n === 1 ? '' : 's'} matching "${what}".` : `Nothing in memory matches "${what}".` })
+        return
+      }
+      const show = (scope: 'user' | 'project', title: string) => {
+        const notes = readMemory(scope, state.cwd).split('\n').filter(l => l.startsWith('- '))
+        return `${title} (${memoryPath(scope, state.cwd).replace(homedir(), '~')})\n${notes.length ? notes.map(n => `  ${n}`).join('\n') : '  nothing yet'}`
+      }
+      commit({ kind: 'system', id: newId(), text: `${show('user', 'About you')}\n\n${show('project', 'About this project')}\n\nDarce adds notes when you correct it or share a preference. Edit the files freely, or /memory forget <text>.` })
+      return
+    }
+    if (result === '__SKILLS__') {
+      commit({ kind: 'user', id: newId(), text })
+      const skills = discoverSkills(state.cwd)
+      const label: Record<string, string> = { project: 'project', user: '~/.darce', claude: '~/.claude', plugin: 'plugin', builtin: 'built-in' }
+      commit({ kind: 'system', id: newId(), text: `${skills.length} skills — Darce loads one automatically when your task matches it:\n${skills.map(s => `  ${s.name}  (${label[s.source]})\n    ${s.description.slice(0, 140)}`).join('\n')}\n\nAdd your own: ~/.darce/skills/<name>/SKILL.md (or .darce/skills in a project). Claude Code skills work as-is.` })
+      return
+    }
+    if (result?.startsWith('__SECURITY__:')) {
+      const target = result.slice(13)
+      void runQuery(target.startsWith('change')
+        ? 'Load the security-review skill and review my uncommitted changes (git diff, including untracked files). Report findings by severity with proof and fixes. Do not change any code.'
+        : `Load the security-review skill and do a security review of this project${target ? ` focusing on ${target}` : ''}. Report findings by severity with proof and fixes. Do not change any code.`)
+      return
+    }
+    if (result?.startsWith('__LEARN__:')) {
+      const arg = result.slice(10)
+      const on = arg === 'on' ? true : arg === 'off' ? false : !learnOn
+      setLearnOn(on)
+      commit({ kind: 'system', id: newId(), text: on ? 'Learn mode on: Darce will explain the concepts behind each change and check your understanding.' : 'Learn mode off.' })
+      return
+    }
     if (result?.startsWith('__UPGRADE__:')) {
       const arg = result.slice(12)
       const plan = arg === 'builder' || arg === 'power' ? arg : undefined
@@ -543,7 +712,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (/^\/compact\b/.test(text)) return
     commit({ kind: 'user', id: newId(), text })
     if (result) commit({ kind: 'system', id: newId(), text: result })
-  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, setState, exit, clearScreen, commit, openTape, startDerby, criticOn])
+  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, setState, exit, clearScreen, commit, openTape, startDerby, criticOn, learnOn, runQuery])
 
   // Run queued messages one after another
   useEffect(() => {
@@ -588,6 +757,36 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         else flashHint('That model made no changes. Pick another, or Esc to discard.')
       } else if (key.escape || (key.ctrl && input === 'c')) finishDerby(null)
       return
+    }
+    if (search) {
+      if (key.return) {
+        const match = historyMatches[search.skip]
+        if (match) dispatch({ type: 'set', text: match })
+        setSearch(null)
+      } else if (key.escape || (key.ctrl && input === 'c')) setSearch(null)
+      else if (key.ctrl && input === 'r') setSearch({ ...search, skip: Math.min(search.skip + 1, Math.max(0, historyMatches.length - 1)) })
+      else if (key.backspace || key.delete) setSearch({ query: search.query.slice(0, -1), skip: 0 })
+      else if (input && !key.ctrl && !key.meta) setSearch({ query: search.query + input, skip: 0 })
+      return
+    }
+    if (completion && completion.items.length && !pending) {
+      const n = completion.items.length
+      const item = completion.items[Math.min(menuIndex, n - 1)]!
+      if (key.upArrow) { setMenuIndex(i => (i - 1 + n) % n); return }
+      if (key.downArrow) { setMenuIndex(i => (i + 1) % n); return }
+      if (key.escape) { setMenuDismissed(editor.text); return }
+      if (key.tab || (key.return && !key.shift)) {
+        const { start, end } = completion.ctx
+        if (key.return && completion.ctx.kind === 'command' && !item.args) {
+          // Run the highlighted command straight away
+          dispatch({ type: 'clear' })
+          if (busy && !/^\/(help|cost)\b/.test(item.value)) { flashHint('Wait for Darce to finish, or press Esc to stop it'); return }
+          handleCommand(item.value)
+          return
+        }
+        dispatch({ type: 'replace', start, end, text: `${item.value} ` })
+        return
+      }
     }
     if (pending) {
       const lower = input.toLowerCase()
@@ -655,6 +854,9 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         flashHint(`Mode: ${MODE_INFO[next]}`, 3000)
         return
       }
+      case 'historySearch':
+        if (editor.history.length) setSearch({ query: '', skip: 0 })
+        return
       case 'expand':
         if (lastToolRef.current) {
           const l = lastToolRef.current
@@ -685,7 +887,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           setQueue(q => [...q, text])
           return
         }
-        void runQuery(text)
+        void runQuery(text, attachMentions(text))
         return
       }
       case 'edit':
@@ -714,6 +916,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             <Markdown text={closeOpenFence(tail)} />
           </Box>
         ) : null}
+
+        {livePlan ? <PlanPanel plan={livePlan} live={busy} /> : null}
 
         {activity ? (
           <Box marginLeft={1} marginBottom={1}>
@@ -744,6 +948,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         )}
 
         <Prompt editor={editor} busy={busy} dimmed={showPicker || !!pending || !!tape || !!derby} />
+        {search ? (
+          <Text>
+            <Text color={t.faint}>  history search </Text><Text color={t.accent}>{search.query || ' '}</Text>
+            <Text color={t.faint}>  {historyMatches[search.skip] ? `→ ${historyMatches[search.skip]!.split('\n')[0]}` : 'no match'}   enter use · ctrl+r older · esc cancel</Text>
+          </Text>
+        ) : completion && !pending && !tape && !derby ? (
+          <CompletionMenu items={completion.items as MenuItem[]} selected={Math.min(menuIndex, completion.items.length - 1)} title={completion.ctx.kind === 'file' ? 'tab inserts the file · it is attached to your message' : undefined} />
+        ) : null}
         <StatusBar
           model={state.currentModel}
           cwd={state.cwd}
@@ -753,6 +965,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           tainted={tainted}
           gear={{ index: gearIndex(gears, state.currentModel), total: gears.length }}
           critic={criticOn}
+          learn={learnOn}
         />
       </Box>
     </>

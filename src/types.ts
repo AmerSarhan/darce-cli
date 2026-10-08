@@ -55,7 +55,8 @@ export type TokenUsage = {
 
 // === Tool Types ===
 
-export type ToolDisplay = import('./utils/diff.js').FileDiff
+export type PlanDisplay = { kind: 'plan'; items: Array<{ text: string; status: 'pending' | 'in_progress' | 'done' }> }
+export type ToolDisplay = import('./utils/diff.js').FileDiff | PlanDisplay
 
 export type ToolResult<T = unknown> = {
   data: T

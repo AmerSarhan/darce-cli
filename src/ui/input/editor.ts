@@ -38,6 +38,7 @@ export type EditorAction =
   | { type: 'yank' }
   | { type: 'clear' }
   | { type: 'set'; text: string }
+  | { type: 'replace'; start: number; end: number; text: string }
   | { type: 'commit' } // after submit: push to history, reset
 
 const isWord = (ch: string | undefined) => !!ch && /[\p{L}\p{N}_]/u.test(ch)
@@ -143,6 +144,8 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
       return { ...s, text: '', cursor: 0, historyIndex: -1 }
     case 'set':
       return { ...s, text: a.text, cursor: a.text.length, historyIndex: -1 }
+    case 'replace':
+      return { ...s, text: s.text.slice(0, a.start) + a.text + s.text.slice(a.end), cursor: a.start + a.text.length, historyIndex: -1 }
     case 'commit': {
       const entry = s.text.trim()
       const history = entry && s.history[0] !== entry ? [entry, ...s.history].slice(0, 200) : s.history

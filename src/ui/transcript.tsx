@@ -6,7 +6,8 @@ import { theme } from './theme.js'
 import { getTool } from '../tools/registry.js'
 import { DiffView } from './DiffView.js'
 import { link } from './termfx.js'
-import type { ToolDisplay } from '../types.js'
+import type { ToolDisplay, PlanDisplay } from '../types.js'
+import { PlanPanel } from './PlanPanel.js'
 import { Receipt, type ReceiptData } from './Receipt.js'
 
 // Everything that has happened in the session. Committed items are printed
@@ -18,6 +19,7 @@ export type TranscriptItem =
   | { kind: 'tool'; id: string; name: string; summary: string; result: string; isError?: boolean; durationMs?: number; display?: ToolDisplay; approval?: string; path?: string }
   | { kind: 'expanded'; id: string; name: string; summary: string; result: string; display?: ToolDisplay }
   | { kind: 'receipt'; id: string; data: ReceiptData }
+  | { kind: 'plan'; id: string; plan: PlanDisplay }
   | { kind: 'critic'; id: string; model: string; path: string; issue?: string }
   | { kind: 'system'; id: string; text: string }
   | { kind: 'error'; id: string; text: string }
@@ -40,7 +42,10 @@ export function toolSummary(name: string, input: Record<string, unknown>): strin
     case 'Bash': return s(input.command).split('\n')[0]!.slice(0, 100)
     case 'Glob': return s(input.pattern)
     case 'Grep': return `"${s(input.pattern)}"${input.path ? ` in ${displayPath(s(input.path))}` : ''}`
-    case 'WebFetch': return s(input.url)
+    case 'WebFetch': case 'StealthFetch': return s(input.url)
+    case 'WebSearch': return `"${s(input.query)}"`
+    case 'Skill': return s(input.name)
+    case 'Remember': return `${s(input.scope)}: ${s(input.note)}`
     default: return ''
   }
 }
@@ -171,6 +176,8 @@ export function TranscriptItemView({ item }: { item: TranscriptItem }) {
       )
     case 'receipt':
       return <Receipt r={item.data} />
+    case 'plan':
+      return <PlanPanel plan={item.plan} live={false} />
     case 'critic':
       return (
         <Box marginLeft={3} marginBottom={item.issue ? 1 : 0}>
