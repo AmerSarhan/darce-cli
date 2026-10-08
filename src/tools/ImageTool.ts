@@ -13,6 +13,9 @@ const inputSchema = z.object({
   aspect_ratio: z.enum(RATIOS).optional().describe('Defaults to 1:1'),
   resolution: z.enum(['1K', '2K']).optional().describe('1K (default) is enough for UI assets; 2K for large hero images'),
   reference_images: z.array(z.string()).max(2).optional().describe('Paths of existing images in the project to edit or match in style'),
+  model: z.enum(['gpt-image', 'nano-banana', 'nano-banana-pro', 'seedream']).optional().describe('Leave unset for the plan default. gpt-image (OpenAI): best for UI assets, icons, logos and any text in the image, and the only one with transparent backgrounds. nano-banana-pro (Google): photorealism and complex scenes. nano-banana: good and cheaper. seedream: fast, cheapest drafts.'),
+  quality: z.enum(['low', 'medium', 'high']).optional().describe('gpt-image only. medium (default) for most assets; high for final hero images; low for quick drafts'),
+  transparent: z.boolean().optional().describe('Transparent background (gpt-image only): icons, logos, stickers'),
 })
 
 type Input = z.infer<typeof inputSchema>
@@ -26,7 +29,7 @@ function pngSize(buf: Buffer): string {
 
 export const ImageTool: ToolDef<typeof inputSchema, string> = {
   name: 'Image',
-  description: 'Generate an image with Seedream 5.0 Flash and save it into the project: icons, illustrations, hero images, textures, mockup assets, or an edit of an existing image (pass it in reference_images). Write a specific visual prompt. Each image counts as 3 requests, so only make the images the task needs, never decorative extras.',
+  description: 'Generate an image and save it into the project: icons, logos, illustrations, hero images, textures, mockup assets, or an edit of an existing image (pass it in reference_images). Write a specific visual prompt, and quote any exact text that must appear. An image counts as 3 to 20 requests depending on model and quality, so only make the images the task needs, never decorative extras.',
   inputSchema,
   isReadOnly: false,
   isConcurrencySafe: false,
@@ -52,13 +55,18 @@ export const ImageTool: ToolDef<typeof inputSchema, string> = {
       res = await fetch(`${base}/v1/images`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? '1:1', resolution: input.resolution ?? '1K', input_references: refs }),
+        body: JSON.stringify({
+          prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? '1:1', resolution: input.resolution ?? '1K', input_references: refs,
+          ...(input.model ? { model: input.model } : {}),
+          ...(input.quality ? { quality: input.quality } : {}),
+          ...(input.transparent ? { background: 'transparent', model: input.model ?? 'gpt-image' } : {}),
+        }),
         signal: context.abortSignal ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(150_000)]) : AbortSignal.timeout(150_000),
       })
     } catch (err) {
       return { data: `Error: image request failed (${(err as Error).message})`, isError: true }
     }
-    const json = (await res.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string; media_type?: string }>; message?: string; cost?: number }
+    const json = (await res.json().catch(() => ({}))) as { data?: Array<{ b64_json?: string; media_type?: string }>; message?: string; cost?: number; model?: string; units?: number }
     if (!res.ok) return { data: `Error: ${json.message || `image generation failed (${res.status})`}`, isError: true }
     const img = json.data?.[0]
     if (!img?.b64_json) return { data: 'Error: the image provider returned no image', isError: true }
@@ -74,7 +82,8 @@ export const ImageTool: ToolDef<typeof inputSchema, string> = {
     await writeFile(filePath, bytes)
     const size = pngSize(bytes)
     const rel = filePath.startsWith(context.cwd + '/') ? filePath.slice(context.cwd.length + 1) : filePath
-    return { data: `Saved ${rel}${size ? ` (${size}` : ' ('}${size ? ', ' : ''}${Math.round(bytes.length / 1024)} KB)${json.cost ? ` · $${json.cost.toFixed(3)}` : ''}` }
+    const by = json.model ? ` with ${json.model.split('/').pop()}` : ''
+    return { data: `Saved ${rel}${size ? ` (${size}` : ' ('}${size ? ', ' : ''}${Math.round(bytes.length / 1024)} KB)${by}${json.units ? ` · counted as ${json.units} requests` : ''}` }
   },
 
   formatResult(output: string): string { return output },

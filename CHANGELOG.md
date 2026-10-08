@@ -2,6 +2,10 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.12.8
+
+- **Better images.** Paid plans now generate with OpenAI's GPT Image 2.5 by default, including transparent backgrounds for icons and logos. Google's Nano Banana 2 and Nano Banana Pro are available too; Seedream stays the free, fast option. Each image counts by what it costs.
+
 ## 0.12.7
 
 - **Prompt caching.** Each conversation stays on one model provider and marks its repeated prefix (instructions and tool list) for caching, so follow-up calls reuse it: cheaper and faster replies, especially with Claude, Gemini and Qwen.
