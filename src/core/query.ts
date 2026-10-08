@@ -1,4 +1,4 @@
-import type { Message, StreamEvent, ToolContext, ContentBlock, ToolUseContent } from '../types.js'
+import type { Message, StreamEvent, ToolContext, ContentBlock, ToolUseContent, ToolDisplay } from '../types.js'
 import type { Provider, OpenRouterTool } from '../providers/provider.js'
 import { getTool, allTools } from '../tools/registry.js'
 import { toAPITools } from '../tools/registry.js'
@@ -17,6 +17,10 @@ export type QueryParams = {
   readFiles: Set<string>
   abortSignal?: AbortSignal
   passEnv?: string[]
+  /** Decide whether a tool call may run. Omitted = always allowed. */
+  authorize?: (call: { id: string; name: string; input: Record<string, unknown> }) => Promise<{ allow: true; via?: string } | { allow: false; reason: string }>
+  /** Called right before a tool that changes the project runs (used for undo snapshots). */
+  beforeChange?: (call: { name: string; input: Record<string, unknown> }) => void
 }
 
 export type QueryResult = {
@@ -111,7 +115,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
       }
     }
 
-    async function executeTool(block: ToolUseContent): Promise<{ block: ToolUseContent; result: string; isError?: boolean }> {
+    async function executeTool(block: ToolUseContent): Promise<{ block: ToolUseContent; result: string; isError?: boolean; display?: ToolDisplay }> {
       const tool = getTool(block.name)
       if (!tool) {
         return { block, result: `Unknown tool: ${block.name}`, isError: true }
@@ -124,7 +128,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
       }
       try {
         const result = await tool.call(parsed.data, toolContext)
-        return { block, result: tool.formatResult(result.data), isError: result.isError }
+        return { block, result: tool.formatResult(result.data), isError: result.isError, display: result.display }
       } catch (err: any) {
         return { block, result: `Tool error: ${err.message}`, isError: true }
       }
@@ -142,7 +146,20 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
         continue
       }
 
-      yield { type: 'tool_executing', id: block.id, name: block.name, input: block.input }
+      const decision = params.authorize
+        ? await params.authorize({ id: block.id, name: block.name, input: block.input })
+        : { allow: true as const }
+
+      if (!decision.allow) {
+        const denied = `Not run: ${decision.reason}`
+        yield { type: 'tool_result_ready', id: block.id, name: block.name, result: denied, isError: true, durationMs: 0, denied: true }
+        messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: block.id, content: denied, is_error: true }] })
+        continue
+      }
+
+      if (!getTool(block.name)?.isReadOnly) params.beforeChange?.({ name: block.name, input: block.input })
+
+      yield { type: 'tool_executing', id: block.id, name: block.name, input: block.input, via: decision.via }
 
       const started = Date.now()
       const executed = await executeTool(block)
@@ -161,7 +178,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
         }
       }
 
-      yield { type: 'tool_result_ready', id: block.id, name: block.name, result, isError, durationMs }
+      yield { type: 'tool_result_ready', id: block.id, name: block.name, result, isError, durationMs, display: executed.display }
 
       // Add to message history for the model
       messages.push({

@@ -1,8 +1,12 @@
 import React from 'react'
+import { isAbsolute, relative, resolve } from 'node:path'
 import { Box, Text } from 'ink'
 import { Markdown } from './Markdown.js'
 import { theme } from './theme.js'
 import { getTool } from '../tools/registry.js'
+import { DiffView } from './DiffView.js'
+import { link } from './termfx.js'
+import type { ToolDisplay } from '../types.js'
 
 // Everything that has happened in the session. Committed items are printed
 // once via <Static> and never re-rendered.
@@ -10,20 +14,29 @@ export type TranscriptItem =
   | { kind: 'banner'; id: string; version: string; model: string; cwd: string }
   | { kind: 'user'; id: string; text: string }
   | { kind: 'assistant'; id: string; text: string }
-  | { kind: 'tool'; id: string; name: string; summary: string; result: string; isError?: boolean; durationMs?: number }
+  | { kind: 'tool'; id: string; name: string; summary: string; result: string; isError?: boolean; durationMs?: number; display?: ToolDisplay; approval?: string; path?: string }
+  | { kind: 'expanded'; id: string; name: string; summary: string; result: string; display?: ToolDisplay }
   | { kind: 'system'; id: string; text: string }
   | { kind: 'error'; id: string; text: string }
 
 let seq = 0
 export const newId = (prefix = 'i') => `${prefix}${++seq}`
 
+/** Show paths relative to the project when they are inside it. */
+export function displayPath(p: string, cwd = process.cwd()): string {
+  if (!p) return p
+  const abs = isAbsolute(p) ? p : resolve(cwd, p)
+  const rel = relative(cwd, abs)
+  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : p
+}
+
 export function toolSummary(name: string, input: Record<string, unknown>): string {
   const s = (v: unknown) => (typeof v === 'string' ? v : '')
   switch (name) {
-    case 'Read': case 'Write': case 'Edit': return s(input.file_path)
+    case 'Read': case 'Write': case 'Edit': return displayPath(s(input.file_path))
     case 'Bash': return s(input.command).split('\n')[0]!.slice(0, 100)
     case 'Glob': return s(input.pattern)
-    case 'Grep': return `"${s(input.pattern)}"${input.path ? ` in ${s(input.path)}` : ''}`
+    case 'Grep': return `"${s(input.pattern)}"${input.path ? ` in ${displayPath(s(input.path))}` : ''}`
     case 'WebFetch': return s(input.url)
     default: return ''
   }
@@ -40,6 +53,10 @@ function formatDuration(ms?: number): string {
 function resultHeadline(item: Extract<TranscriptItem, { kind: 'tool' }>): string {
   const lines = item.result.split('\n').filter(l => l.trim())
   if (item.isError) return lines[0]?.replace(/^Error:\s*/i, '') ?? 'failed'
+  if (item.display?.kind === 'diff') {
+    const d = item.display
+    return d.created ? `created, ${d.added} lines` : `+${d.added} −${d.removed}`
+  }
   switch (item.name) {
     case 'Read': return `${Math.max(0, item.result.split('\n').length)} lines`
     case 'Glob': return item.result.startsWith('No ') ? 'no matches' : `${lines.length} files`
@@ -61,12 +78,14 @@ function previewLines(item: Extract<TranscriptItem, { kind: 'tool' }>): string[]
     : [...lines.slice(0, max), `… ${lines.length - max} more`]
 }
 
-export function ToolLine({ name, summary, status, headline, durationMs }: {
+export function ToolLine({ name, summary, status, headline, durationMs, approval, path }: {
   name: string
   summary: string
   status: 'running' | 'done' | 'error'
   headline?: string
   durationMs?: number
+  approval?: string
+  path?: string
 }) {
   const t = theme()
   const marker = status === 'error' ? '✗' : changesProject(name) ? '●' : '○'
@@ -75,12 +94,13 @@ export function ToolLine({ name, summary, status, headline, durationMs }: {
     <Box>
       <Text color={markerColor}>{marker} </Text>
       <Text color={t.tool} bold>{name}</Text>
-      {summary ? <Text color={t.muted}> {summary}</Text> : null}
+      {summary ? <Text color={t.muted}> {path ? link(summary, path) : summary}</Text> : null}
       {status !== 'running' && (headline || durationMs !== undefined) ? (
         <Text color={status === 'error' ? t.danger : t.faint}>
           {'  '}{headline}{headline && durationMs !== undefined ? ', ' : ''}{formatDuration(durationMs)}
         </Text>
       ) : null}
+      {approval ? <Text color={t.faint}>  · {approval}</Text> : null}
     </Box>
   )
 }
@@ -114,15 +134,19 @@ export function TranscriptItemView({ item }: { item: TranscriptItem }) {
       )
     case 'tool': {
       const preview = previewLines(item)
+      const diff = !item.isError && item.display?.kind === 'diff' ? item.display : null
       return (
-        <Box flexDirection="column" marginLeft={1} marginBottom={preview.length ? 1 : 0}>
+        <Box flexDirection="column" marginLeft={1} marginBottom={preview.length || diff ? 1 : 0}>
           <ToolLine
             name={item.name}
             summary={item.summary}
             status={item.isError ? 'error' : 'done'}
             headline={resultHeadline(item)}
             durationMs={item.durationMs}
+            approval={item.approval}
+            path={item.path}
           />
+          {diff && <DiffView diff={diff} maxLines={diff.created ? 12 : 40} />}
           {preview.length > 0 && (
             <Box marginLeft={2} flexDirection="column">
               {preview.map((l, i) => <Text key={i} color={t.faint}>{l || ' '}</Text>)}
@@ -131,6 +155,17 @@ export function TranscriptItemView({ item }: { item: TranscriptItem }) {
         </Box>
       )
     }
+    case 'expanded':
+      return (
+        <Box flexDirection="column" marginLeft={1} marginBottom={1}>
+          {item.display?.kind === 'diff'
+            ? <Text><Text bold>{item.summary}</Text><Text color={t.faint}>  {item.display.created ? `new file, ${item.display.added} lines` : `+${item.display.added} −${item.display.removed}`}</Text></Text>
+            : <Text color={t.muted}>Full output of {item.name} {item.summary}</Text>}
+          {item.display?.kind === 'diff'
+            ? <DiffView diff={item.display} maxLines={Infinity} />
+            : <Box marginLeft={2}><Text color={t.faint}>{item.result || '(no output)'}</Text></Box>}
+        </Box>
+      )
     case 'system':
       return (
         <Box marginBottom={1}>

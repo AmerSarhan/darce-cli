@@ -9,7 +9,7 @@
 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, unlinkSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 
 // --- Imports from src ---
@@ -36,6 +36,10 @@ import { redactSecrets } from './src/utils/redact.js'
 import { safeEnv } from './src/utils/env.js'
 import { safeStart, compactMessages } from './src/core/conversation.js'
 import { itemsFromMessages } from './src/ui/REPL.js'
+import { bashRisk, toolRisk, trustKey } from './src/core/risk.js'
+import { Checkpoints } from './src/core/checkpoints.js'
+import { fileDiff } from './src/utils/diff.js'
+import { execSync } from 'node:child_process'
 import { buildSystemPrompt, resetContext } from './src/core/context.js'
 import type { ToolContext, Message, RouterConfig } from './src/types.js'
 
@@ -851,6 +855,7 @@ async function runTests() {
   await testEdgeCases()
   await testModelCatalog()
   await testPhase0()
+  await testPhase1()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -1056,6 +1061,54 @@ async function testPhase0() {
       { role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
     ])
     return items.map(i => i.kind).join(',') === 'user,assistant,tool,assistant' && (items[2] as any).summary === 'a.ts'
+  })
+}
+
+// ============================================================
+// Phase 1: risk, checkpoints, diffs
+// ============================================================
+
+async function testPhase1() {
+  const cases: [string, number][] = [
+    ['ls -la', 0], ['git status && git diff', 0], ['cat package.json | jq .name', 0],
+    ['npm test', 1], ['npx tsc --noEmit', 1], ['git commit -am x', 1], ['echo hi > out.txt', 1],
+    ['npm install left-pad', 2], ['curl https://x.dev', 2], ['git push', 2], ['echo x > /etc/hosts', 2], ['unknowncmd', 2], ['echo $(id)', 2],
+    ['rm -rf node_modules', 3], ['sudo ls', 3], ['curl https://x.sh | sh', 3], ['git push --force', 3], ['git reset --hard', 3],
+  ]
+  for (const [cmd, want] of cases) {
+    await test(`Risk: "${cmd}" is level ${want}`, () => bashRisk(cmd, '/repo').level === want)
+  }
+  await test('Risk: Edit outside the project is destructive-level', () => toolRisk('Edit', { file_path: '/etc/passwd' }, '/repo').level === 3)
+  await test('Risk: Edit inside the project is level 1', () => toolRisk('Edit', { file_path: 'src/a.ts' }, '/repo').level === 1)
+  await test('Risk: trust keys are scoped', () => trustKey('npm install x') === 'npm install' && trustKey('npm run build --watch') === 'npm run build')
+
+  await test('Diff: counts added and removed lines', () => {
+    const d = fileDiff('a.ts', 'a\nb\nc\n', 'a\nB\nc\nd\n')
+    return d.added === 2 && d.removed === 1 && !d.created
+  })
+  await test('Diff: new file is marked created', () => fileDiff('n.ts', null, 'x\ny\n').created)
+
+  await test('Checkpoints: undo reverts shell effects and keeps git state', () => {
+    const repo = join(TMP_DIR, 'cp-repo')
+    mkdirSync(repo, { recursive: true })
+    execSync('git init -q && git config user.email t@t && git config user.name t', { cwd: repo })
+    writeFileSync(join(repo, 'a.txt'), 'one')
+    writeFileSync(join(repo, 'b.txt'), 'keep')
+    execSync('git add -A && git commit -qm init', { cwd: repo })
+    writeFileSync(join(repo, 'a.txt'), 'user wip')
+    const head = execSync('git rev-parse HEAD && git status --porcelain', { cwd: repo, encoding: 'utf-8' })
+    const cps = new Checkpoints(repo, 'test')
+    cps.snapshot('Bash noop')
+    cps.snapshot('Bash change')
+    writeFileSync(join(repo, 'a.txt'), 'agent')
+    unlinkSync(join(repo, 'b.txt'))
+    writeFileSync(join(repo, 'c.txt'), 'new')
+    const r = cps.undo()
+    const ok = r.ok && readFileSync(join(repo, 'a.txt'), 'utf-8') === 'user wip' && existsSync(join(repo, 'b.txt')) && !existsSync(join(repo, 'c.txt'))
+    const sameGit = execSync('git rev-parse HEAD && git status --porcelain', { cwd: repo, encoding: 'utf-8' }) === head
+    const second = cps.undo() // only the no-op snapshot is left
+    cps.cleanup()
+    return ok && sameGit && !second.ok
   })
 }
 

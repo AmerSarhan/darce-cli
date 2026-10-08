@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
+import { fileDiff } from '../utils/diff.js'
 
 const inputSchema = z.object({
   file_path: z.string().describe('Absolute path to the file to edit'),
@@ -50,7 +51,8 @@ export const EditTool: ToolDef<typeof inputSchema, string> = {
         : content.replace(input.old_string, () => input.new_string)
 
       await writeFile(filePath, updated, 'utf-8')
-      return { data: `File updated: ${input.file_path}` }
+      const display = fileDiff(String(input.file_path), content, updated)
+      return { data: `File updated: ${input.file_path} (+${display.added} -${display.removed})`, display }
     } catch (err: any) {
       return { data: `Error editing file: ${err.message}`, isError: true }
     }

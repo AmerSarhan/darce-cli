@@ -21,11 +21,14 @@ if (args.includes('--help') || args.includes('-h')) {
     darce logout                    Remove saved credentials
     darce --resume, -r              Resume last session
     darce -p "explain src/app.ts"   Print the answer and exit (for scripts and CI)
+    darce --mode plan               auto (default), ask, plan (read-only) or full
     darce --version                 Print version
     darce --help                    Show this help
 
   In a session:
     /model, Ctrl+P                  Pick or search 300+ models
+    /undo, /diff                    Undo Darce's last change, review all changes
+    Shift+Tab                       Cycle approval mode
     /help                           All commands
     Shift+Enter, Ctrl+J, \\ Enter    New line
     Esc, Ctrl+C                     Stop Darce (Ctrl+C twice to exit)
@@ -50,6 +53,12 @@ if (args[0] === 'login') {
   if (modelIndex !== -1 && args[modelIndex + 1]) {
     modelOverride = args[modelIndex + 1]
     args.splice(modelIndex, 2)
+  }
+
+  const modeIndex = args.indexOf('--mode')
+  if (modeIndex !== -1 && args[modeIndex + 1]) {
+    process.env.DARCE_MODE = args[modeIndex + 1]
+    args.splice(modeIndex, 2)
   }
 
   const printMode = args.includes('--print') || args.includes('-p')
@@ -207,6 +216,7 @@ async function main(modelOverride?: string, initialPrompt?: string, resumeSessio
     cwd: process.cwd(),
     readFiles: new Set<string>(),
     modelOverride: modelOverride || null,
+    mode: (['auto', 'ask', 'plan', 'full'].includes(config.mode ?? '') ? config.mode : 'auto') as 'auto' | 'ask' | 'plan' | 'full',
   }
 
   const { saveCosts } = await import('../state/costTracker.js')
@@ -264,6 +274,17 @@ async function printMain(modelOverride?: string, prompt?: string) {
 
   const controller = new AbortController()
   process.on('SIGINT', () => controller.abort())
+  const { toolRisk } = await import('../core/risk.js')
+  const mode = config.mode ?? 'auto'
+  // No one can answer a prompt here: safe steps run, anything that would ask is declined
+  const authorize = async (call: { name: string; input: Record<string, unknown> }) => {
+    const risk = toolRisk(call.name, call.input, process.cwd())
+    if (mode === 'full' || risk.level === 0) return { allow: true as const }
+    if (mode === 'plan') return { allow: false as const, reason: 'plan mode is on (read-only).' }
+    if (mode === 'auto' && risk.level <= 1) return { allow: true as const }
+    process.stderr.write(`[${call.name}] declined (${risk.reason}). Use --mode full to allow.\n`)
+    return { allow: false as const, reason: `this needs approval (${risk.reason}) and Darce is running non-interactively.` }
+  }
 
   const gen = query({
     messages: [{ role: 'user', content: prompt }],
@@ -275,6 +296,7 @@ async function printMain(modelOverride?: string, prompt?: string) {
     readFiles: new Set(),
     abortSignal: controller.signal,
     passEnv: config.passEnv,
+    authorize,
   })
 
   let failed = false

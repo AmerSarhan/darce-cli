@@ -39,8 +39,8 @@ export type StreamEvent =
   | { type: 'tool_use_delta'; id: string; json: string }
   | { type: 'tool_use_end'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'message_complete'; message: Message; usage: TokenUsage }
-  | { type: 'tool_executing'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result_ready'; id: string; name: string; result: string; isError?: boolean; durationMs: number }
+  | { type: 'tool_executing'; id: string; name: string; input: Record<string, unknown>; via?: string }
+  | { type: 'tool_result_ready'; id: string; name: string; result: string; isError?: boolean; durationMs: number; display?: ToolDisplay; denied?: boolean }
   | { type: 'error'; error: string }
 
 export type SpinnerMode = 'idle' | 'requesting' | 'thinking' | 'responding' | 'tool-input' | 'tool-use'
@@ -55,9 +55,13 @@ export type TokenUsage = {
 
 // === Tool Types ===
 
+export type ToolDisplay = import('./utils/diff.js').FileDiff
+
 export type ToolResult<T = unknown> = {
   data: T
   isError?: boolean
+  /** Rich rendering for the terminal (never sent to the model) */
+  display?: ToolDisplay
 }
 
 export type ToolContext = {
@@ -80,7 +84,11 @@ export type RouterConfig = {
   rules: RouterRule[]
 }
 
+export type PermissionMode = 'auto' | 'ask' | 'plan' | 'full'
+
 export type DarceConfig = {
+  /** auto: run safe steps, ask before risky ones (default) · ask: ask before any change · plan: read-only · full: never ask */
+  mode?: PermissionMode
   apiKey: string
   apiBase?: string
   router: RouterConfig
@@ -116,4 +124,5 @@ export type AppState = {
   cwd: string
   readFiles: Set<string>
   modelOverride: string | null
+  mode: PermissionMode
 }

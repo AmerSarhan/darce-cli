@@ -10,7 +10,7 @@ export function Spinner({ label, startedAt }: { label: string; startedAt: number
   const t = theme()
   const seconds = Math.floor((Date.now() - startedAt) / 1000)
   return (
-    <Text>
+    <Text wrap="truncate-end">
       <Text color={t.accent}>{FRAMES[frame % FRAMES.length]} </Text>
       <Text color={t.muted}>{label}</Text>
       <Text color={t.faint}>  {seconds}s · esc to stop</Text>

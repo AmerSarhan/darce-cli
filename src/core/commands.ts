@@ -57,6 +57,22 @@ const COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: 'undo',
+    aliases: ['u'],
+    description: 'Undo the last change Darce made (files and shell effects)',
+    execute: () => '__UNDO__',
+  },
+  {
+    name: 'diff',
+    description: 'Show every file Darce changed this session',
+    execute: () => '__DIFF__',
+  },
+  {
+    name: 'mode',
+    description: 'Approval mode: auto, ask, plan (read-only) or full (Shift+Tab cycles)',
+    execute: (args) => `__MODE__:${args.trim().toLowerCase()}`,
+  },
+  {
     name: 'clear',
     aliases: ['c'],
     description: 'Clear conversation history',

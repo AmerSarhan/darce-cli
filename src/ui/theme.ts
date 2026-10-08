@@ -12,6 +12,9 @@ export type Theme = {
   toolWrite: string // marker for tools that change the project
   diffAdd: string
   diffDel: string
+  diffAddBg: string
+  diffDelBg: string
+  risk: [string, string, string, string]
 }
 
 const dark: Theme = {
@@ -26,6 +29,9 @@ const dark: Theme = {
   toolWrite: '#E8913A',
   diffAdd: '#7CC48A',
   diffDel: '#EF6F6C',
+  diffAddBg: '#16281C',
+  diffDelBg: '#2E1719',
+  risk: ['#5E6B7D', '#9CC3E6', '#E5C07B', '#EF6F6C'],
 }
 
 const light: Theme = {
@@ -40,6 +46,9 @@ const light: Theme = {
   toolWrite: '#B45309',
   diffAdd: '#027A48',
   diffDel: '#B42318',
+  diffAddBg: '#E3F6E8',
+  diffDelBg: '#FBE6E4',
+  risk: ['#98A2B3', '#1D4ED8', '#B54708', '#B42318'],
 }
 
 /**

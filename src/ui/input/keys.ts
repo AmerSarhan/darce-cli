@@ -8,6 +8,8 @@ export type InputIntent =
   | { kind: 'escape' }
   | { kind: 'modelPicker' }
   | { kind: 'clearScreen' }
+  | { kind: 'cycleMode' }
+  | { kind: 'expand' }
   | { kind: 'none' }
 
 const edit = (action: EditorAction): InputIntent => ({ kind: 'edit', action })
@@ -38,6 +40,7 @@ export function intentFor(input: string, key: Key): InputIntent {
       case 'd': return edit({ type: 'delete' })
       case 'h': return edit({ type: 'backspace' })
       case 'l': return { kind: 'clearScreen' }
+      case 'o': return { kind: 'expand' }
       case 'p':
       case 'm': return { kind: 'modelPicker' }
     }
@@ -61,6 +64,7 @@ export function intentFor(input: string, key: Key): InputIntent {
   if (key.downArrow) return edit({ type: 'down' })
   if (key.home) return edit({ type: 'lineStart' })
   if (key.end) return edit({ type: 'lineEnd' })
+  if (key.tab && key.shift) return { kind: 'cycleMode' }
   if (key.tab || key.pageUp || key.pageDown) return { kind: 'none' }
 
   if (input) return edit({ type: 'insert', text: input })

@@ -53,6 +53,15 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 - **Free tier** — start without a credit card or an API key.
 - **Open source** — MIT licensed.
 
+## What's New in 0.6.0
+
+- **Approvals ranked by risk.** Every command is parsed and scored: read-only, changes the project, reaches outside, or destructive. In the default `auto` mode safe steps just run; risky ones show what will happen and why, and you answer with one key (`y` once, `a` always for this command in this project, `n` deny). Destructive commands can never be "always allowed".
+- **Four modes, Shift+Tab to switch.** `auto` (default), `ask` (approve every change), `plan` (read-only: Darce proposes, doesn't touch), `full` (nothing asks). Also `--mode` and `/mode`.
+- **`/undo` that covers shell commands too.** Before every change, Darce snapshots your working tree (without touching your branch, index or stash), so `/undo` reverses edits *and* whatever a command did — created, deleted or modified files.
+- **Diffs for every edit**, syntax-highlighted with line numbers, plus `/diff` for everything Darce changed this session. Ctrl+O shows the full output of the last step.
+- **Web content guard.** After Darce reads a web page, commands that would normally run automatically ask first, so a malicious page can't quietly steer it.
+- **Terminal integration.** Clickable file paths, a progress indicator in the tab, a desktop notification when a long task finishes or needs you, and a live window title.
+
 ## What's New in 0.5.0
 
 - **Stop without quitting.** Esc or Ctrl+C stops the current task immediately (including the network request). Ctrl+C twice exits.
@@ -95,6 +104,8 @@ Requires Node.js 22 or newer. Already installed? Update with `npm install -g dar
 /clear    Reset conversation     Up/Down        Input history
 /cost     Session costs          Ctrl+P         Model picker
 /compact  Shrink context         Ctrl+L         Clear the screen
+/undo     Undo last change       Shift+Tab      Cycle approval mode
+/diff     Review all changes     Ctrl+O         Full output of last step
 ```
 
 - **7 tools** — Read, Write, Edit, Bash, Glob, Grep, WebFetch
@@ -151,6 +162,9 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 | `/clear` | Clear conversation (`/c` alias) |
 | `/cost` | Show session cost breakdown |
 | `/compact` | Compact conversation history |
+| `/undo` | Undo Darce's last change, including shell effects (`/u`) |
+| `/diff` | Show every file Darce changed this session |
+| `/mode` | Show or set the approval mode |
 | `/quit` | Exit (`/q` alias) |
 
 ## Config
@@ -174,6 +188,23 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 
 ## Safety
 
+### Approval modes
+
+| Mode | Read-only steps | Edits & builds in the project | Network, installs, unknown commands | Destructive (`rm -rf`, `sudo`, force-push…) |
+|---|---|---|---|---|
+| `auto` (default) | run | run | ask | ask |
+| `ask` | run | ask | ask | ask |
+| `plan` | run | blocked | blocked | blocked |
+| `full` | run | run | run | run |
+
+Switch with Shift+Tab, `/mode <name>`, `darce --mode <name>`, or `"mode"` in `~/.darcerc`. In `darce -p` (non-interactive) anything that would ask is declined instead.
+
+### Undo
+
+Every change is snapshotted first. `/undo` restores the files a step touched — including files created or deleted by shell commands. In a git repo this uses private refs under `refs/darce/` and never touches your branch, index or stash. Ignored files (like `node_modules`) are not snapshotted.
+
+### Secrets
+
 Commands Darce runs get your environment **minus** variables that look like credentials (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `DATABASE_URL`, …). If a command needs one, allow it explicitly:
 
 ```json
@@ -190,7 +221,7 @@ git clone https://github.com/AmerSarhan/darce-cli.git
 cd darce-cli
 npm install
 npm run dev           # Run from source
-npm test              # 139 tests
+npm test              # 163 tests
 npm run build         # Build for production
 ```
 
