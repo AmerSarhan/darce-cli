@@ -70,7 +70,7 @@ export function Welcome({ info }: { info: WelcomeInfo }) {
         <Wordmark reveal={99} sweep={-10} />
         <Box flexDirection="column" marginLeft={3}>
           <Text bold>v{info.version}</Text>
-          <Text color={t.muted}>AI coding agent · 300+ models</Text>
+          <Text color={t.muted}>AI coding agent · 250+ coding models</Text>
         </Box>
       </Box>
       <Box flexDirection="column" marginTop={1}>

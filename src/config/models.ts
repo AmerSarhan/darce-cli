@@ -124,7 +124,36 @@ type OpenRouterModel = {
   supported_parameters?: string[]
 }
 
-// Keep only chat models that can call tools — Darce is useless without them
+/**
+ * Can this model drive a coding agent? Tool calling alone isn't enough: these are left out of the
+ * picker (a model named with --model or /model still works).
+ */
+const NOT_FOR_CODING = [
+  /audio|voxtral|whisper|tts|omni/i,               // speech and omni (audio/video) models
+  /image|banana/i,                                 // image generators
+  /guard|safeguard|moderation/i,                   // safety classifiers
+  /euryale|sao10k|thedrummer|gryphe|anthracite|mancer|undi95|lumimaid|magnum|roleplay|rp-/i, // roleplay/creative finetunes
+  /(^|[-/])vl([-/:]|$)|\dv(-|$)|vision/i,          // vision-specialised variants (qwen3-vl, glm-4.6v, glm-5v-turbo)
+  /^openrouter\/|router/i,                         // routers pick an unknown model per request
+  /:online$|deep-research|relace-search|saba/i,   // web/research wrappers and regional-language models
+  /nano|micro/i,                                   // too small for multi-step tool use
+  /gpt-[\w.]*chat|chatgpt/i,                      // chat-tuned variants of agentic models
+  /-(sante|fin|med|legal)(\W|$)/i,                 // domain finetunes (health, finance…)
+]
+const RELEASED_AFTER = Date.UTC(2025, 0, 1) / 1000 // older generations are superseded for agent work
+const MIN_CONTEXT = 64_000
+
+export function isCodingModel(m: { id: string; created?: number; contextWindow?: number }): boolean {
+  if (NOT_FOR_CODING.some(re => re.test(m.id))) return false
+  if (m.created && m.created < RELEASED_AFTER) return false
+  if (m.contextWindow && m.contextWindow < MIN_CONTEXT) return false
+  // Dense models of 14B parameters or fewer (e.g. -8b, -14b) aren't reliable agents; MoE ids like 30b-a3b are judged by total size
+  const size = /[-_](\d+(?:\.\d+)?)b(?:[-_:]|$)/i.exec(m.id.split('/')[1] ?? m.id)
+  if (size && Number(size[1]) <= 14) return false
+  return true
+}
+
+// Keep only chat models that can call tools and can drive a coding agent
 export function toModelProfiles(models: OpenRouterModel[]): ModelProfile[] {
   return models
     .filter(m => m.supported_parameters?.includes('tools'))
@@ -145,6 +174,7 @@ export function toModelProfiles(models: OpenRouterModel[]): ModelProfile[] {
         costPer1kOutput: Math.max(0, Number(m.pricing?.completion ?? 0) * 1000),
       }
     })
+    .filter(isCodingModel)
     .sort((a, b) => (b.created ?? 0) - (a.created ?? 0))
 }
 
@@ -161,7 +191,10 @@ function readCache(): { fetchedAt: number; models: ModelProfile[]; popular?: str
 export async function loadModels(opts: { force?: boolean } = {}): Promise<ModelProfile[]> {
   const cached = readCache()
   if (cached?.models.length && !opts.force && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    catalog = cached.models
+    // Caches from older versions may still hold models that aren't fit for coding
+    catalog = cached.models.filter(isCodingModel)
+    const usable = new Set(catalog.map(m => m.id))
+    popularity = (cached.popular ?? []).filter(id => usable.has(id))
     popularity = cached.popular ?? []
     return catalog
   }
@@ -185,7 +218,7 @@ export async function loadModels(opts: { force?: boolean } = {}): Promise<ModelP
   } catch {}
 
   if (cached?.models.length) {
-    catalog = cached.models
+    catalog = cached.models.filter(isCodingModel)
     popularity = cached.popular ?? []
   }
   return catalog

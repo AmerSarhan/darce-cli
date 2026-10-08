@@ -49,7 +49,7 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 
 ## Why Darce?
 
-- **Any model** — 300+ tool-capable models via OpenRouter: Claude, GPT, Gemini, Grok, DeepSeek, Kimi, GLM, Qwen. Switch mid-conversation.
+- **Any coding model** — 250+ models picked for agent work via OpenRouter: Claude, GPT, Gemini, Grok, DeepSeek, Kimi, GLM, Qwen. Switch mid-conversation.
 - **Always current** — the model list is fetched live, so new models show up the day they launch.
 - **Lightweight** — a ~70 kB package that installs in seconds and starts instantly.
 - **Free tier** — start without a credit card or an API key.
@@ -180,7 +180,7 @@ Requires Node.js 22 or newer. Already installed? Update with `npm install -g dar
 
 ## Models
 
-Every tool-capable model on [OpenRouter](https://openrouter.ai/models) — 300+ and counting. The list is fetched live (cached for 24h), so new models show up the day they launch.
+Every [OpenRouter](https://openrouter.ai/models) model that can drive a coding agent — 250+ and counting (tool calling, a 64k+ context, current generation; audio, vision-only, tiny and router models are left out, though any model still works with `--model`). The list is fetched live (cached for 24h), so new models show up the day they launch.
 
 Open the picker with `/model` and type to search, or jump straight to one:
 

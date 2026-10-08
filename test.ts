@@ -52,6 +52,7 @@ import { listCommands } from './src/core/commands.js'
 import { renderTerminalMarkdown } from './src/ui/markdownRender.js'
 import { buildSystemPrompt, resetContext } from './src/core/context.js'
 import type { ToolContext, Message, RouterConfig } from './src/types.js'
+import { isCodingModel } from './src/config/models.js'
 
 // ============================================================
 // Test framework
@@ -867,6 +868,7 @@ async function runTests() {
   await testPhase0()
   await testPhase1()
   await testSwarmMerge()
+  await testCodingModels()
   await testPhase2()
   await testBrain()
 
@@ -896,25 +898,27 @@ async function runTests() {
 // ============================================================
 
 async function testModelCatalog() {
+  // Realistic dates (2025+) and agent-sized contexts, so only the rule under test decides
+  const D = 1_750_000_000
   const raw = [
-    { id: 'a/old', created: 100, context_length: 1000, pricing: { prompt: '0.000001', completion: '0.000002' }, supported_parameters: ['tools'] },
-    { id: 'b/new', created: 200, context_length: 2000, pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools', 'reasoning'], architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] } },
-    { id: 'c/no-tools', created: 300, supported_parameters: ['temperature'] },
-    { id: 'd/image-gen', created: 400, supported_parameters: ['tools'], architecture: { output_modalities: ['image'] } },
-    { id: 'b/new:batch', created: 200, supported_parameters: ['tools'] },
-    { id: 'e/router', created: 50, pricing: { prompt: '-1', completion: '-1' }, supported_parameters: ['tools'] },
+    { id: 'a/old', created: D + 100, context_length: 128_000, pricing: { prompt: '0.000001', completion: '0.000002' }, supported_parameters: ['tools'] },
+    { id: 'b/new', created: D + 200, context_length: 200_000, pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools', 'reasoning'], architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] } },
+    { id: 'c/no-tools', created: D + 300, supported_parameters: ['temperature'] },
+    { id: 'd/image-gen', created: D + 400, supported_parameters: ['tools'], architecture: { output_modalities: ['image'] } },
+    { id: 'b/new:batch', created: D + 200, supported_parameters: ['tools'] },
+    { id: 'e/variable', created: D + 50, pricing: { prompt: '-1', completion: '-1' }, supported_parameters: ['tools'] },
   ]
   const profiles = toModelProfiles(raw)
 
   await test('Catalog: keeps only tool-capable text models', () =>
-    profiles.map(p => p.id).join(',') === 'b/new,a/old,e/router')
+    profiles.map(p => p.id).join(',') === 'b/new,a/old,e/variable')
   await test('Catalog: sorted newest first', () => profiles[0]!.id === 'b/new')
   await test('Catalog: converts per-token pricing to per-1k', () => {
     const p = profiles.find(p => p.id === 'a/old')!
     return Math.abs(p.costPer1kInput - 0.001) < 1e-9 && Math.abs(p.costPer1kOutput - 0.002) < 1e-9
   })
   await test('Catalog: clamps negative (variable) pricing to 0', () =>
-    profiles.find(p => p.id === 'e/router')!.costPer1kInput === 0)
+    profiles.find(p => p.id === 'e/variable')!.costPer1kInput === 0)
   await test('Catalog: derives vision + reasoning strengths', () => {
     const s = profiles[0]!.strengths
     return s.includes('vision') && s.includes('reasoning')
@@ -1080,6 +1084,15 @@ async function testPhase0() {
 // ============================================================
 // Phase 1: risk, checkpoints, diffs
 // ============================================================
+
+async function testCodingModels() {
+  const keep = ['anthropic/claude-sonnet-5.5', 'qwen/qwen3-coder', 'deepseek/deepseek-v4-pro', 'moonshotai/kimi-k3', 'openai/gpt-5.3-codex', 'mistralai/devstral-2512', 'qwen/qwen3-coder-30b-a3b-instruct']
+  const drop = ['openai/gpt-audio', 'openrouter/auto', 'qwen/qwen3-vl-235b-a22b-instruct', 'z-ai/glm-5v-turbo', 'openai/gpt-5-nano', 'mistralai/ministral-8b-2512', 'sao10k/l3.1-euryale-70b', 'google/gemini-3-pro-image', 'openai/gpt-oss-safeguard-20b']
+  await test('Models: strong coding models stay in the picker', () => keep.every(id => isCodingModel({ id })))
+  await test('Models: audio, vision-only, tiny, router and roleplay models are left out', () => drop.every(id => !isCodingModel({ id })))
+  await test('Models: old generations and small contexts are left out', () =>
+    !isCodingModel({ id: 'openai/gpt-4o', created: Date.UTC(2024, 4, 1) / 1000 }) && !isCodingModel({ id: 'x/y', contextWindow: 32_000 }))
+}
 
 async function testSwarmMerge() {
   // Two swarm workers edit the same file: separate regions combine, overlapping ones are reported

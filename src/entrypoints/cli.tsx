@@ -26,7 +26,7 @@ if (args.includes('--help') || args.includes('-h')) {
     darce --help                    Show this help
 
   In a session:
-    /model, Ctrl+P                  Pick or search 300+ models
+    /model, Ctrl+P                  Pick or search 250+ coding models
     /undo, /diff                    Undo Darce's last change, review all changes
     /rewind, Esc Esc                Scrub through every change and rewind
     /derby <task>                   Race models on a task, apply the best result
