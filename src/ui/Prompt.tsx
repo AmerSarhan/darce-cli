@@ -114,8 +114,10 @@ export function Prompt({ onSubmit, isLoading, history, disabled = false }: Props
     }
 
     if (ch && !key.ctrl && !key.meta) {
-      setInput(prev => prev.slice(0, cursor) + ch + prev.slice(cursor))
-      setCursor(c => c + 1)
+      // Pastes arrive as one chunk — flatten newlines and advance by the full length
+      const text = ch.replace(/\r\n?|\n/g, ' ')
+      setInput(prev => prev.slice(0, cursor) + text + prev.slice(cursor))
+      setCursor(c => c + text.length)
     }
   }, { isActive: !disabled })
 

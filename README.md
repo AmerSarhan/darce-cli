@@ -64,11 +64,10 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 
 ```bash
 npm install -g darce-cli
-darce login
 darce
 ```
 
-That's it. No config files. No API keys to copy. No Docker.
+That's it. The first run creates your free account right in the terminal (email + password, no card) and drops you straight into a session. No config files. No API keys to copy. No Docker.
 
 Requires Node.js 22 or newer. Already installed? Update with `npm install -g darce-cli@latest`.
 
@@ -132,7 +131,7 @@ Start free. Upgrade when you need more. Cancel anytime.
 | **Dashboard** | Basic | Full | Full + priority support |
 
 ```bash
-darce login           # Start free
+darce                 # Start free — sets up your account on first run
 darce upgrade         # Upgrade to Builder or Power
 ```
 

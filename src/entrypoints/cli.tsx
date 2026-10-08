@@ -16,15 +16,16 @@ if (args.includes('--help') || args.includes('-h')) {
     darce                           Interactive REPL
     darce "fix the login bug"       Start with a prompt
     darce --model <id>              Override model
-    darce login                     Sign in / create account
+    darce login                     Create a free account or sign in
     darce upgrade                   Upgrade to Builder or Power
     darce logout                    Remove saved credentials
     darce --resume, -r              Resume last session
     darce --version                 Print version
     darce --help                    Show this help
 
-  Hotkeys:
-    Ctrl+M                          Switch model
+  In a session:
+    /model                          Pick or search 300+ models
+    /help                           All commands
     Ctrl+C                          Cancel / Exit
 `)
   process.exit(0)
@@ -66,67 +67,10 @@ if (args[0] === 'login') {
 
 // === Auth Flow ===
 async function authFlow() {
-  const { createInterface } = await import('node:readline')
-  const { writeFileSync, existsSync, readFileSync, mkdirSync } = await import('node:fs')
-  const { join } = await import('node:path')
-  const { homedir } = await import('node:os')
-
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-  const ask = (q: string): Promise<string> => new Promise(r => rl.question(q, r))
-
-  console.log('\n  Welcome to Darce\n')
-
-  const email = await ask('  Email: ')
-  const password = await ask('  Password: ')
-  rl.close()
-
-  console.log('\n  Connecting...')
-
-  // Try login first, then register
-  let data: any
-  let res = await fetch('https://api.darce.dev/v1/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  })
-
-  if (res.ok) {
-    data = await res.json()
-    console.log('  Signed in!')
-  } else {
-    // Try register
-    res = await fetch('https://api.darce.dev/v1/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    })
-    if (res.ok) {
-      data = await res.json()
-      console.log('  Account created!')
-    } else {
-      const err = await res.json()
-      throw new Error(`  ${err.message || err.error || 'Auth failed'}`)
-    }
-  }
-
-  // Save to ~/.darcerc
-  const rcPath = join(homedir(), '.darcerc')
-  let existing: Record<string, unknown> = {}
-  try {
-    if (existsSync(rcPath)) {
-      existing = JSON.parse(readFileSync(rcPath, 'utf-8'))
-    }
-  } catch {}
-
-  existing.apiKey = data.api_key
-  existing.apiBase = 'https://api.darce.dev'
-
-  const dir = join(homedir(), '.darce')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(rcPath, JSON.stringify(existing, null, 2) + '\n')
-
-  console.log(`\n  API key saved to ~/.darcerc`)
-  console.log(`  You're ready — just run: darce\n`)
+  const { onboard } = await import('../auth/onboarding.js')
+  const apiKey = await onboard()
+  if (!apiKey) process.exit(1)
+  console.log('  Saved to ~/.darcerc. Start coding with: darce\n')
 }
 
 async function logoutFlow() {
@@ -200,9 +144,13 @@ async function main(modelOverride?: string, initialPrompt?: string, resumeSessio
   const { loadConfig } = await import('../config/config.js')
   const config = loadConfig()
 
+  // First run — set up an account right here, then drop straight into the REPL
   if (!config.apiKey) {
-    console.log('\n  No API key found. Run `darce login` to get started.\n')
-    process.exit(1)
+    const { onboard } = await import('../auth/onboarding.js')
+    const apiKey = await onboard()
+    if (!apiKey) process.exit(1)
+    config.apiKey = apiKey
+    config.apiBase = process.env.DARCE_API_BASE || 'https://api.darce.dev'
   }
 
   // Refresh the model catalog in the background — the picker uses whatever is loaded
