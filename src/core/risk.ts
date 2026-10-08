@@ -141,6 +141,12 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
     const wrapped = classifySimple(inner, [], pipedFrom, cwd)
     return max(risk, cmd === 'xargs' ? max(wrapped, { level: 1, reason: `runs ${inner[0]} on piped input` }) : wrapped)
   }
+  // cd only moves the rest of a chain; inside the project that's harmless
+  if (cmd === 'cd' || cmd === 'pushd' || cmd === 'popd') {
+    const target = args.find(a => !a.startsWith('-'))
+    if (cmd === 'popd' || !target || target === '-') return risk
+    return outside(target, cwd) ? max(risk, { level: 2, reason: `works outside the project (${target})` }) : risk
+  }
   if (DESTRUCTIVE.has(cmd)) return { level: 3, reason: `${cmd} can change your system` }
   if (RUNNERS.has(cmd)) {
     // npx/bunx/pnpx run the project's own copy when it's installed; only a download is risky
@@ -169,27 +175,38 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
   }
 
   if (cmd === 'git') {
+    // Global options come before the subcommand: -C <dir>, --git-dir <dir>, --no-pager, -P…
+    let k = 0
+    let gitDir: string | undefined
+    while (k < args.length && args[k]!.startsWith('-')) {
+      const a = args[k]!
+      if (a === '-C' || a === '--git-dir' || a === '--work-tree') { if (a === '-C' || a === '--work-tree') gitDir = args[k + 1]; k += 2 }
+      else if (a === '--namespace' || a === '-c') k += 2
+      else { if (a.startsWith('--work-tree=')) gitDir = a.slice(12); k++ }
+    }
+    const gsub = args[k] ?? ''
+    if (gitDir && outside(gitDir, cwd)) return max(risk, { level: 2, reason: `runs git in another folder (${gitDir})` })
     // Options before the subcommand can set config that runs programs (core.pager, core.sshCommand…)
     if (args.some(a => a === '-c' || a.startsWith('--config-env') || a.startsWith('--exec-path'))) return max(risk, { level: 2, reason: 'git with config overrides can run programs' })
-    if (sub === 'config') {
+    if (gsub === 'config') {
       const readOnly = args.some(a => a === '--get' || a === '--get-all' || a === '--get-regexp' || a === '--list' || a === '-l' || a === '--show-origin' && args.includes('--list'))
       return readOnly ? risk : max(risk, { level: 2, reason: 'changes git configuration, which can make git run programs' })
     }
     if (args.some(a => a.startsWith('-O') || a.startsWith('--open-files-in-pager') || a.startsWith('--ext-diff'))) return max(risk, { level: 2, reason: 'git option that runs another program' })
     const out = args.find(a => a.startsWith('--output='))
     if (out) risk = max(risk, outside(out.slice(9), cwd) ? { level: 2, reason: 'writes outside the project' } : { level: 1, reason: 'writes a file' })
-    if (sub === 'stash' && (args.includes('list') || args.includes('show'))) return risk
-    if (GIT_NETWORK.has(sub)) {
-      if (sub === 'push' && args.some(a => a === '--force' || a === '-f' || a.startsWith('--force-with-lease') || a.startsWith('+'))) return { level: 3, reason: 'force-pushes and can overwrite remote history' }
-      return max(risk, { level: 2, reason: `git ${sub} talks to a remote` })
+    if (gsub === 'stash' && (args.includes('list') || args.includes('show'))) return risk
+    if (GIT_NETWORK.has(gsub)) {
+      if (gsub === 'push' && args.some(a => a === '--force' || a === '-f' || a.startsWith('--force-with-lease') || a.startsWith('+'))) return { level: 3, reason: 'force-pushes and can overwrite remote history' }
+      return max(risk, { level: 2, reason: `git ${gsub} talks to a remote` })
     }
-    if (sub === 'reset' && args.includes('--hard')) return { level: 3, reason: 'discards uncommitted work (git reset --hard)' }
-    if (sub === 'clean' && args.some(a => /^-[a-zA-Z]*f/.test(a))) return { level: 3, reason: 'deletes untracked files (git clean -f)' }
-    if (sub === 'branch' && args.some(a => a === '-D')) return max(risk, { level: 2, reason: 'force-deletes a branch' })
-    if (sub === 'stash' && (args.includes('drop') || args.includes('clear'))) return max(risk, { level: 2, reason: 'drops stashed work' })
-    if (GIT_READ.has(sub)) return risk
-    if (GIT_WRITE_LOCAL.has(sub)) return max(risk, { level: 1, reason: `git ${sub} changes the repository` })
-    return max(risk, { level: 2, reason: `git ${sub}` })
+    if (gsub === 'reset' && args.includes('--hard')) return { level: 3, reason: 'discards uncommitted work (git reset --hard)' }
+    if (gsub === 'clean' && args.some(a => /^-[a-zA-Z]*f/.test(a))) return { level: 3, reason: 'deletes untracked files (git clean -f)' }
+    if (gsub === 'branch' && args.some(a => a === '-D')) return max(risk, { level: 2, reason: 'force-deletes a branch' })
+    if (gsub === 'stash' && (args.includes('drop') || args.includes('clear'))) return max(risk, { level: 2, reason: 'drops stashed work' })
+    if (GIT_READ.has(gsub)) return risk
+    if (GIT_WRITE_LOCAL.has(gsub)) return max(risk, { level: 1, reason: `git ${gsub} changes the repository` })
+    return max(risk, { level: 2, reason: `git ${gsub}` })
   }
 
   if (PKG_MANAGERS.has(cmd)) {

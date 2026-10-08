@@ -264,6 +264,13 @@ export class Checkpoints {
     try { this.baseline = this.writeTree() } catch {}
   }
 
+  /** Everything changed since checkpoint `index` was taken, including shell commands' effects (git mode only). */
+  diffSince(index: number): FileDiff[] | null {
+    const cp = this.stack[index]
+    if (!this.root || !cp?.commit) return null
+    try { return this.diffTrees(`${cp.commit}^{tree}`, this.writeTree()) } catch { return null }
+  }
+
   /** Every file that differs from the session baseline (or the oldest snapshot). */
   sessionDiff(): FileDiff[] | null {
     if (!this.root) return null

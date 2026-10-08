@@ -242,7 +242,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       if (info) {
         const plan = info.tier === 'free' ? 'Starter' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
         const left = typeof info.daily_limit === 'number' ? ` · ${Math.max(0, info.daily_limit - info.daily_requests).toLocaleString()} of ${info.daily_limit.toLocaleString()} requests left` : ' · unlimited'
-        accountLine.current = `${info.email} · ${plan}${left}`
+        // DARCE_DEMO=1 keeps your email out of screen recordings
+        if (!process.env.DARCE_DEMO) accountLine.current = `${info.email} · ${plan}${left}`
         setSuggestOn(prev => (prev === null ? info.tier !== 'free' : prev))
       }
       clearTimeout(timer)
@@ -333,6 +334,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const tokensBefore = getTotalTokens()
     const receipt: ReceiptData = { files: [], commands: 0, approvedByYou: 0, denied: 0, maxRisk: 0, redacted: 0, models: [], tokens: 0, cost: 0, ms: 0, undoable: true, stopped: false }
     const fileStats = new Map<string, { path: string; added: number; removed: number; created: boolean }>()
+    const checkpointsAtStart = checkpointsRef.current?.count ?? 0
     let steps = 0
 
     // Streaming text: complete markdown blocks are frozen into the transcript,
@@ -543,7 +545,11 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         return null
       })
       if (steps > 0) {
-        receipt.files = [...fileStats.values()]
+        // In a git repo the checkpoints know everything this turn changed, shell commands included
+        const actual = checkpointsRef.current?.diffSince(checkpointsAtStart)
+        receipt.files = actual
+          ? actual.filter(d => d.added || d.removed || d.created).map(d => ({ path: d.path, added: d.added, removed: d.removed, created: !!d.created }))
+          : [...fileStats.values()]
         receipt.tokens = getTotalTokens() - tokensBefore
         receipt.cost = getTotalCost() - costBefore
         receipt.ms = took

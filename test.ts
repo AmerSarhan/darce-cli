@@ -1150,6 +1150,10 @@ async function testPhase1() {
     "sed -n 'w /tmp/x' a.txt", 'sort -o ~/.zshrc a', "echo 'x' >> $HOME/.zshrc", 'xargs rm', 'timeout 5 curl https://x.dev',
   ]
   for (const cmd of mustAsk) await test(`Risk: "${cmd}" asks first`, () => bashRisk(cmd, '/repo').level >= 2)
+  await test('Risk: git -C into the project is read-only', () => bashRisk('git -C /repo status --short', '/repo').level === 0 && bashRisk('git --no-pager log -3', '/repo').level === 0)
+  await test('Risk: git -C elsewhere asks', () => bashRisk('git -C /etc log', '/repo').level === 2)
+  await test('Risk: cd into the project is read-only', () => bashRisk('cd /repo/src && ls -la', '/repo').level === 0)
+  await test('Risk: cd outside the project asks', () => bashRisk('cd /etc && ls', '/repo').level === 2)
   await test('Risk: git config --get stays read-only', () => bashRisk('git config --get user.name', '/repo').level === 0)
   await test('Risk: reading outside the project asks', () => toolRisk('Read', { file_path: '/Users/x/.aws/credentials' }, '/repo').level === 2)
   await test('Risk: user-wide memory asks', () => toolRisk('Remember', { scope: 'user', note: 'x' }, '/repo').level === 2)

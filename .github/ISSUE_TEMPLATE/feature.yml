@@ -1,0 +1,10 @@
+name: Feature idea
+description: Something you'd like Darce to do
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: What you're trying to do
+      description: The task or workflow, and where Darce gets in the way today.
+    validations:
+      required: true

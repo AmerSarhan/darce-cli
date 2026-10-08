@@ -1,7 +1,7 @@
 {
   "name": "darce-cli",
-  "version": "0.12.3",
-  "description": "A blazing-fast AI coding agent for your terminal",
+  "version": "0.12.4",
+  "description": "The coding agent you can undo: 250+ models in your terminal, parallel swarms, model racing, and /undo for everything, even shell commands.",
   "type": "module",
   "bin": {
     "darce": "dist/cli.js"
@@ -14,30 +14,28 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
-    "ai",
-    "cli",
     "coding-agent",
-    "terminal",
+    "ai-coding-agent",
     "ai-agent",
-    "code-generation",
-    "developer-tools",
+    "cli",
+    "terminal",
     "llm",
-    "devtools",
-    "automation",
-    "code-assistant",
-    "darce",
-    "deepseek",
-    "gemini",
-    "grok",
-    "qwen",
+    "openrouter",
     "claude",
-    "copilot-alternative",
-    "cursor-alternative",
-    "nodejs",
-    "typescript",
     "gpt",
+    "gemini",
+    "deepseek",
+    "qwen",
     "kimi",
-    "glm"
+    "multi-agent",
+    "git-worktree",
+    "undo",
+    "claude-code-alternative",
+    "aider-alternative",
+    "cursor-alternative",
+    "code-assistant",
+    "developer-tools",
+    "darce"
   ],
   "author": "Amer Sarhan",
   "license": "MIT",
@@ -45,7 +43,7 @@
     "type": "git",
     "url": "git+https://github.com/AmerSarhan/darce-cli.git"
   },
-  "homepage": "https://darce.dev",
+  "homepage": "https://cli.darce.dev",
   "files": [
     "dist",
     "LICENSE",
@@ -76,5 +74,8 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "bugs": {
+    "url": "https://github.com/AmerSarhan/darce-cli/issues"
   }
 }

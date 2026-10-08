@@ -1,0 +1,23 @@
+name: Bug report
+description: Something in Darce didn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+      description: What you asked Darce to do, what it did, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Timing log
+      description: If it stalled or was slow, paste the output of `/debug`.
+      render: text
+  - type: input
+    attributes:
+      label: Version and model
+      placeholder: "darce --version, and the model from the status bar"
+  - type: input
+    attributes:
+      label: OS and terminal
+      placeholder: "macOS 15, Ghostty"

@@ -1,5 +1,16 @@
 import { z } from 'zod'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+
+const SKIP_DIRS = ['node_modules', '.git', 'dist', '.next', 'build', '.venv', 'venv', '__pycache__', 'target', '.turbo', 'coverage']
+
+/** ripgrep is fast but often not installed; fall back to the system grep so search always works. */
+let rgAvailable: boolean | undefined
+function hasRipgrep(): boolean {
+  if (rgAvailable === undefined) {
+    try { rgAvailable = spawnSync('rg', ['--version'], { stdio: 'ignore', timeout: 3000 }).status === 0 } catch { rgAvailable = false }
+  }
+  return rgAvailable
+}
 import { resolve } from 'node:path'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
@@ -14,7 +25,7 @@ type Input = z.infer<typeof inputSchema>
 
 export const GrepTool: ToolDef<typeof inputSchema, string> = {
   name: 'Grep',
-  description: 'Search file contents using regex. Uses ripgrep (rg) for speed. Returns matching lines with file paths and line numbers.',
+  description: 'Search file contents using a regex. Returns matching lines with file paths and line numbers.',
   inputSchema,
   isReadOnly: true,
   isConcurrencySafe: true,
@@ -30,15 +41,19 @@ export const GrepTool: ToolDef<typeof inputSchema, string> = {
       // Minified bundles produce enormous single-line matches
       '--max-columns', '400', '--max-columns-preview',
       // Dependency and build folders at any depth, even outside a git repository
-      ...['node_modules', '.git', 'dist', '.next', 'build', '.venv', 'venv', '__pycache__', 'target', '.turbo', 'coverage'].flatMap(d => ['--glob', `!**/${d}/**`]),
+      ...SKIP_DIRS.flatMap(d => ['--glob', `!**/${d}/**`]),
     ]
     if (input.glob) {
       args.push('--glob', input.glob)
     }
     args.push(input.pattern, searchPath)
 
+    const rg = hasRipgrep()
+    const bin = rg ? 'rg' : 'grep'
+    const grepArgs = ['-rnIE', '-m', '100', ...SKIP_DIRS.map(d => `--exclude-dir=${d}`), ...(input.glob ? [`--include=${input.glob.replace(/^\*\*\//, '')}`] : []), '-e', input.pattern, searchPath]
+
     return new Promise((resolvePromise) => {
-      const proc = spawn('rg', args, {
+      const proc = spawn(bin, rg ? args : grepArgs, {
         cwd: context.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 30000,
@@ -56,8 +71,7 @@ export const GrepTool: ToolDef<typeof inputSchema, string> = {
       proc.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
 
       proc.on('error', () => {
-        // rg not found, suggest install
-        resolvePromise({ data: 'ripgrep (rg) not found. Install it: https://github.com/BurntSushi/ripgrep#installation', isError: true })
+        resolvePromise({ data: `Search failed: ${bin} could not be started.`, isError: true })
       })
 
       proc.on('close', (code, signal) => {
