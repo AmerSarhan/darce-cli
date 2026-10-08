@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, existsSync, symlinkSync, copyFileSync, mkdirSync, rmSync, unlinkSync, readFileSync, lstatSync } from 'node:fs'
+import { mkdtempSync, existsSync, symlinkSync, copyFileSync, mkdirSync, rmSync, unlinkSync, readFileSync, lstatSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path'
 import { query } from './query.js'
 import { toolRisk } from './risk.js'
 import { buildSystemPrompt } from './context.js'
+import { threadSystemPrompt } from './threads.js'
 import { getModelProfile } from '../config/models.js'
 import { fileDiff, type FileDiff } from '../utils/diff.js'
 import type { Provider } from '../providers/provider.js'
@@ -16,6 +17,10 @@ import type { Message } from '../types.js'
  */
 export type Racer = {
   model: string
+  /** Swarm workers: their own part of the task, a short label, and a note about the other workers */
+  task?: string
+  title?: string
+  context?: string
   status: 'starting' | 'running' | 'done' | 'error' | 'stopped'
   activity: string
   steps: number
@@ -46,10 +51,10 @@ export class Derby {
   constructor(
     private root: string,
     private base: string, // commit of the working tree at the start
-    models: string[],
+    models: Array<string | { model: string; task: string; title: string; context?: string }>,
     private onUpdate: () => void,
   ) {
-    this.racers = models.map(model => ({ model, status: 'starting', activity: 'setting up', steps: 0, cost: 0, ms: 0, answer: '', diffs: [] }))
+    this.racers = models.map(m => ({ ...(typeof m === 'string' ? { model: m } : m), status: 'starting', activity: 'setting up', steps: 0, cost: 0, ms: 0, answer: '', diffs: [] }))
   }
 
   private mode: 'ask' | 'auto' | 'full' = 'auto'
@@ -77,11 +82,11 @@ export class Derby {
 
       const price = getModelProfile(r.model)
       const gen = query({
-        messages: [...history, { role: 'user', content: task }],
+        messages: [...history, { role: 'user', content: r.task ?? task }],
         model: r.model,
         provider,
         cwd: r.dir,
-        systemPrompt: buildSystemPrompt(r.dir),
+        systemPrompt: r.task ? `${threadSystemPrompt(r.dir, 'swarm')}${r.context ? `\n\n${r.context}` : ''}` : buildSystemPrompt(r.dir),
         maxTurns: 30,
         readFiles: new Set(),
         abortSignal: this.controller.signal,
@@ -156,6 +161,59 @@ export class Derby {
       }
     }
     return { files: r.diffs.length }
+  }
+
+  /**
+   * Swarm: apply every finished worker's changes in order. A file changed by several workers is
+   * combined with a three-way merge against the starting version; if the edits overlap, the earlier
+   * worker's version is kept and the clash is reported.
+   */
+  applyAll(): { files: number; merged: string[]; conflicts: Array<{ path: string; worker: string }> } {
+    const touched = new Set<string>()
+    const merged: string[] = []
+    const conflicts: Array<{ path: string; worker: string }> = []
+    let files = 0
+    for (const r of this.racers) {
+      if (r.status !== 'done' || !r.dir) continue
+      for (const d of r.diffs) {
+        const target = resolve(this.root, d.path)
+        const source = join(r.dir, d.path)
+        const rel = relative(this.root, target)
+        if (rel.startsWith('..') || isAbsolute(rel)) continue
+        let link = false
+        try { link = lstatSync(source).isSymbolicLink() } catch {}
+        if (link) continue
+        const label = r.title ?? r.model
+        if (touched.has(d.path) && existsSync(source) && existsSync(target)) {
+          const tmp = mkdtempSync(join(tmpdir(), 'darce-merge-'))
+          try {
+            const base = (() => { try { return git(['show', `${this.base}:${d.path}`], this.root) } catch { return '' } })()
+            writeFileSync(join(tmp, 'base'), base)
+            copyFileSync(target, join(tmp, 'ours'))
+            copyFileSync(source, join(tmp, 'theirs'))
+            try {
+              const out = execFileSync('git', ['merge-file', '-p', join(tmp, 'ours'), join(tmp, 'base'), join(tmp, 'theirs')], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 })
+              writeFileSync(target, out)
+              merged.push(d.path)
+            } catch {
+              conflicts.push({ path: d.path, worker: label }) // overlapping edits: keep the earlier version
+            }
+          } finally {
+            rmSync(tmp, { recursive: true, force: true })
+          }
+          continue
+        }
+        if (existsSync(source)) {
+          mkdirSync(dirname(target), { recursive: true })
+          copyFileSync(source, target)
+        } else {
+          try { unlinkSync(target) } catch {}
+        }
+        touched.add(d.path)
+        files++
+      }
+    }
+    return { files, merged, conflicts }
   }
 
   cleanup() {

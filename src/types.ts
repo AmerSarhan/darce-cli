@@ -72,11 +72,15 @@ export type ToolResult<T = unknown> = {
   display?: ToolDisplay
 }
 
+export type SpawnRequest = { description: string; prompt: string; kind: 'explore' | 'work' }
+
 export type ToolContext = {
   cwd: string
   readFiles: Set<string>
   abortSignal?: AbortSignal
   passEnv?: string[]
+  /** Starts a sub-agent thread and resolves with its report (only in the interactive app) */
+  spawnAgent?: (req: SpawnRequest) => Promise<{ report: string; isError?: boolean }>
 }
 
 // === Config Types ===

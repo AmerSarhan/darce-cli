@@ -60,6 +60,10 @@ import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
 import type { FileDiff } from '../utils/diff.js'
 import { saveGlobalSetting } from '../config/config.js'
 import { WHY_NOTE } from '../core/context.js'
+import { runThread, Mutex, type Thread } from '../core/threads.js'
+import type { SpawnRequest } from '../types.js'
+import { ThreadsPanel } from './ThreadsPanel.js'
+import { planSwarm, laneNote, type SwarmPart } from '../core/swarm.js'
 
 type Props = {
   provider: Provider
@@ -155,9 +159,15 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [contextTokens, setContextTokens] = useState(() => estimateMessagesTokens(restored ?? []))
   const [pending, setPending] = useState<Pending | null>(null)
   const [tape, setTape] = useState<{ index: number; preview: FileDiff[] | null } | null>(null)
-  const [derby, setDerby] = useState<{ d: Derby; task: string; selected: number; finished: boolean } | null>(null)
+  const [derby, setDerby] = useState<{ d: Derby; task: string; selected: number; finished: boolean; variant?: 'derby' | 'swarm' } | null>(null)
   const [, setDerbyTick] = useState(0)
   const [criticOn, setCriticOn] = useState(!!state.config.critic)
+  // Threads (sub-agents) from this session; the tick re-renders the live panel
+  const threadsRef = useRef<Thread[]>([])
+  const workMutexRef = useRef(new Mutex())
+  const [, setThreadsTick] = useState(0)
+  const bumpThreads = useCallback(() => setThreadsTick(n => n + 1), [])
+  const turnThreadsFrom = useRef(0)
   const [livePlan, setLivePlan] = useState<PlanDisplay | null>(null)
   const [learnOn, setLearnOn] = useState(state.config.why !== false)
   const [menuIndex, setMenuIndex] = useState(0)
@@ -289,6 +299,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const runQuery = useCallback(async (text: string, attachments = '', images: ImageContent[] = []) => {
     setBusy(true)
     setSuggestion(null)
+    turnThreadsFrom.current = threadsRef.current.length
     commit({ kind: 'user', id: newId(), text })
     // Notes about things the user did between turns (e.g. /undo) ride along with the next message
     const notes = notesRef.current.splice(0)
@@ -344,7 +355,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setTitle('darce · working')
     setProgress('busy')
 
-    const authorize = async (call: { id: string; name: string; input: Record<string, unknown> }) => {
+    const authorize = async (call: { id: string; name: string; input: Record<string, unknown> }, origin?: string) => {
       const risk = toolRisk(call.name, call.input, state.cwd)
       receipt.maxRisk = Math.max(receipt.maxRisk, risk.level) as ReceiptData['maxRisk']
       const mode = modeRef.current
@@ -364,7 +375,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           req: {
             id: call.id,
             name: call.name,
-            summary: toolSummary(call.name, call.input),
+            summary: (origin ? `[${origin}] ` : '') + toolSummary(call.name, call.input),
             detail: call.name === 'Bash' ? String(call.input.command ?? '') : String(call.input.file_path ?? call.input.url ?? ''),
             risk: taintedRef.current && call.name === 'Bash' && risk.level < 2
               ? { level: 2, reason: `${risk.reason} — asked because web content is in this conversation` }
@@ -385,6 +396,24 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       checkpointsRef.current?.snapshot(`${call.name} ${toolSummary(call.name, call.input)}`, paths, call.id)
     }
 
+    // Threads started by the Agent tool: explore threads run side by side, work threads one at a time
+    const spawnAgent = async (req: SpawnRequest) => {
+      const t: Thread = {
+        id: threadsRef.current.length + 1, title: req.description, kind: req.kind, model: modelRef.current,
+        status: 'queued', activity: req.kind === 'work' ? 'waiting for its turn' : 'starting', steps: 0, cost: 0,
+        startedAt: Date.now(), ms: 0, log: [], report: '',
+      }
+      threadsRef.current = [...threadsRef.current, t]
+      bumpThreads()
+      const run = () => runThread({
+        thread: t, prompt: req.prompt, cwd: state.cwd, provider, passEnv: state.config.passEnv, signal: controller.signal,
+        authorize: call => authorize(call, `thread ${t.id}: ${t.title}`), beforeChange, onUpdate: bumpThreads,
+      })
+      await (req.kind === 'work' ? workMutexRef.current.run(run) : run())
+      if (t.status === 'done') return { report: t.report }
+      return { report: `The thread ${t.status === 'stopped' ? 'was stopped' : `failed: ${t.error ?? 'unknown error'}`}.${t.report ? `\n\nPartial report:\n${t.report}` : ''}`, isError: true }
+    }
+
     try {
       const gen = query({
         messages: messagesRef.current,
@@ -398,6 +427,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         passEnv: state.config.passEnv,
         authorize,
         beforeChange,
+        spawnAgent,
       })
 
       let result = await gen.next()
@@ -608,6 +638,75 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setBusy(false)
   }, [derby, commit])
 
+  const startSwarm = useCallback(async (args: string) => {
+    const task = args.trim()
+    if (!task) { commit({ kind: 'system', id: newId(), text: 'Usage: /swarm <task>\nA lead agent splits the task into 2-4 independent parts. Each part runs as a thread in its own git worktree at the same time, then all results are merged into your files in one step (/undo reverts the lot).' }); return }
+    if (modeRef.current === 'plan') { commit({ kind: 'system', id: newId(), text: '/swarm makes changes, and plan mode is read-only. Switch mode with Shift+Tab first.' }); return }
+    const cps = checkpointsRef.current!
+    if (!cps.gitRoot) { commit({ kind: 'system', id: newId(), text: '/swarm needs a git repository: each thread works in its own worktree.' }); return }
+    commit({ kind: 'user', id: newId(), text: `/swarm ${task}` })
+    setBusy(true)
+    setTitle('darce · swarm')
+    setActivity({ label: 'Planning the swarm', startedAt: Date.now() })
+    let parts: SwarmPart[]
+    try {
+      parts = await planSwarm(task, provider, modelRef.current, state.cwd)
+    } catch (err) {
+      setActivity(null); setBusy(false); setTitle('darce')
+      commit({ kind: 'system', id: newId(), text: `Couldn't plan the swarm: ${(err as Error).message}` })
+      return
+    }
+    setActivity(null)
+    commit({ kind: 'system', id: newId(), text: `Swarm plan: ${parts.length} thread${parts.length === 1 ? '' : 's'}\n${parts.map((p, i) => `  ${i + 1}. ${p.title}`).join('\n')}` })
+    const base = cps.commitWorkingTree('darce swarm base')
+    if (!base) { setBusy(false); setTitle('darce'); commit({ kind: 'system', id: newId(), text: 'Couldn\'t snapshot your working tree for the swarm.' }); return }
+    const workers = parts.map((p, i) => ({ model: modelRef.current, task: p.prompt, title: p.title, context: laneNote(parts, i) }))
+    const d = new Derby(cps.gitRoot, base, workers, () => setDerbyTick(n => n + 1))
+    setDerby({ d, task, selected: 0, finished: false, variant: 'swarm' })
+    setProgress('busy')
+    const started = Date.now()
+    await d.run(task, [], provider, state.config.passEnv, modeRef.current as 'ask' | 'auto' | 'full')
+    setProgress('off')
+    setTitle('darce')
+    if (Date.now() - started >= 20_000) notify('Swarm finished', 'Review and merge')
+    // Keep the workers in /threads
+    for (const r of d.racers) {
+      threadsRef.current = [...threadsRef.current, {
+        id: threadsRef.current.length + 1, title: r.title ?? r.model, kind: 'swarm', model: r.model,
+        status: r.status === 'starting' || r.status === 'running' ? 'stopped' : r.status, activity: r.status, steps: r.steps, cost: r.cost,
+        startedAt: started, ms: r.ms, log: [], report: r.answer.trim(), error: r.error,
+      }]
+    }
+    setDerby(prev => prev && { ...prev, finished: true })
+  }, [commit, provider, state.cwd, state.config.passEnv])
+
+  const finishSwarm = useCallback((merge: boolean) => {
+    if (!derby) return
+    const { d, task } = derby
+    if (merge) {
+      checkpointsRef.current!.snapshot(`Swarm: ${task.slice(0, 40)}`)
+      const { files, merged, conflicts } = d.applyAll()
+      const done = d.racers.filter(r => r.status === 'done')
+      const lines = [`Merged ${done.length} thread${done.length === 1 ? '' : 's'}: ${files} file${files === 1 ? '' : 's'} changed${merged.length ? `, ${merged.length} combined from several threads` : ''}. /undo reverts the whole swarm.`]
+      for (const c of conflicts) lines.push(`  ! ${c.path}: "${c.worker}" overlapped an earlier thread's edit; the earlier version was kept.`)
+      commit({ kind: 'system', id: newId(), text: lines.join('\n') })
+      for (const r of done) for (const diff of r.diffs) commit({ kind: 'expanded', id: newId(), name: r.title ?? 'changed', summary: diff.path, result: '', display: diff })
+      const report = d.racers.map(r => `## ${r.title}\n${r.answer.trim() || `(${r.status}${r.error ? `: ${r.error}` : ''})`}`).join('\n\n')
+      messagesRef.current = [
+        ...messagesRef.current,
+        { role: 'user', content: `/swarm ${task}` },
+        { role: 'assistant', content: `The swarm finished and its changes are merged into the working tree.\n\n${report}${conflicts.length ? `\n\nOverlapping edits not merged: ${conflicts.map(c => c.path).join(', ')}` : ''}` },
+      ]
+      setContextTokens(estimateMessagesTokens(messagesRef.current))
+    } else {
+      d.stop()
+      commit({ kind: 'system', id: newId(), text: 'Swarm discarded. Your files were not changed.' })
+    }
+    d.cleanup()
+    setDerby(null)
+    setBusy(false)
+  }, [derby, commit])
+
   const handleCommand = useCallback((text: string) => {
     const ctx: CommandContext = {
       setModel: (model: string) => setState(prev => ({ ...prev, modelOverride: model, currentModel: model })),
@@ -780,6 +879,22 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       return
     }
     if (result?.startsWith('__DERBY__:')) { void startDerby(result.slice(10)); return }
+    if (result?.startsWith('__SWARM__:')) { void startSwarm(result.slice(10)); return }
+    if (result?.startsWith('__THREADS__:')) {
+      const all = threadsRef.current
+      const n = parseInt(result.slice(12), 10)
+      if (!all.length) { commit({ kind: 'system', id: newId(), text: 'No threads yet. Darce starts threads on its own for parallel research, or use /swarm <task>.' }); return }
+      const th = all[n - 1]
+      if (n && th) {
+        const head = `Thread ${th.id}: ${th.title}\n${th.kind} · ${th.model} · ${th.status} · ${th.steps} steps · ${Math.round(th.ms / 1000)}s · $${th.cost.toFixed(4)}`
+        const log = th.log.length ? `\n\nSteps:\n${th.log.slice(-15).map(l => `  ${l}`).join('\n')}` : ''
+        commit({ kind: 'system', id: newId(), text: `${head}${log}\n\nReport:\n${th.report || th.error || '(none)'}` })
+        return
+      }
+      const icon = (s: Thread['status']) => (s === 'done' ? '✓' : s === 'error' ? '✗' : s === 'stopped' ? '■' : '…')
+      commit({ kind: 'system', id: newId(), text: `Threads this session\n${all.map(t => `  ${String(t.id).padStart(2)} ${icon(t.status)} ${t.title.padEnd(34).slice(0, 34)} ${t.kind.padEnd(8)} ${t.steps} steps · ${Math.round(t.ms / 1000)}s · $${t.cost.toFixed(4)}`).join('\n')}\n/threads <number> shows a thread's steps and report.` })
+      return
+    }
     if (result?.startsWith('__CRITIC__:')) {
       const [arg, model] = result.slice(11).split(/\s+/)
       const on = arg === 'on' ? true : arg === 'off' ? false : !criticOn
@@ -802,7 +917,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (/^\/compact\b/.test(text)) return
     commit({ kind: 'user', id: newId(), text })
     if (result) commit({ kind: 'system', id: newId(), text: result })
-  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, state.config.suggestModel, setState, exit, clearScreen, commit, openTape, startDerby, criticOn, learnOn, suggestOn, runQuery])
+  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, state.config.suggestModel, setState, exit, clearScreen, commit, openTape, startDerby, startSwarm, criticOn, learnOn, suggestOn, runQuery])
 
   // Run queued messages one after another
   useEffect(() => {
@@ -842,10 +957,15 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       else if (key.upArrow) setDerby({ ...derby, selected: (derby.selected + n - 1) % n })
       else if (key.downArrow) setDerby({ ...derby, selected: (derby.selected + 1) % n })
       else if (key.return) {
+        if (derby.variant === 'swarm') {
+          if (derby.d.racers.some(r => r.status === 'done' && r.diffs.length)) finishSwarm(true)
+          else flashHint('No thread made changes. Esc to close.')
+          return
+        }
         const r = derby.d.racers[derby.selected]!
         if (r.diffs.length) finishDerby(derby.selected)
         else flashHint('That model made no changes. Pick another, or Esc to discard.')
-      } else if (key.escape || (key.ctrl && input === 'c')) finishDerby(null)
+      } else if (key.escape || (key.ctrl && input === 'c')) (derby.variant === 'swarm' ? finishSwarm(false) : finishDerby(null))
       return
     }
     if (search) {
@@ -1039,6 +1159,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         ) : null}
 
         {livePlan ? <PlanPanel plan={livePlan} live={busy} /> : null}
+        {busy && threadsRef.current.length > turnThreadsFrom.current ? <ThreadsPanel threads={threadsRef.current.slice(turnThreadsFrom.current)} /> : null}
 
         {activity ? (
           <Box marginLeft={1} marginBottom={1}>
@@ -1054,7 +1175,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             preview={tape.preview}
           />
         ) : null}
-        {derby ? <DerbyBoard task={derby.task} racers={derby.d.racers} selected={derby.selected} finished={derby.finished} /> : null}
+        {derby ? <DerbyBoard task={derby.task} racers={derby.d.racers} selected={derby.selected} finished={derby.finished} variant={derby.variant} /> : null}
 
         {queue.map((q, i) => (
           <Text key={i} color={t.faint}>↳ queued: {q.split('\n')[0]}</Text>

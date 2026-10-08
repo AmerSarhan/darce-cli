@@ -866,6 +866,7 @@ async function runTests() {
   await testModelCatalog()
   await testPhase0()
   await testPhase1()
+  await testSwarmMerge()
   await testPhase2()
   await testBrain()
 
@@ -1079,6 +1080,44 @@ async function testPhase0() {
 // ============================================================
 // Phase 1: risk, checkpoints, diffs
 // ============================================================
+
+async function testSwarmMerge() {
+  // Two swarm workers edit the same file: separate regions combine, overlapping ones are reported
+  const root = join(tmpdir(), `darce-swarm-${Date.now()}`)
+  mkdirSync(root, { recursive: true })
+  const sh = (c: string, cwd = root) => execSync(c, { cwd, stdio: 'pipe' }).toString().trim()
+  sh('git init -q && git config user.email t@t && git config user.name t')
+  const original = 'line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n'
+  writeFileSync(join(root, 'f.txt'), original)
+  sh('git add -A && git commit -qm base')
+  const base = sh('git rev-parse HEAD')
+  const worker = (name: string, content: string) => {
+    const dir = join(tmpdir(), `darce-swarm-w-${name}-${Date.now()}`)
+    sh(`git worktree add --detach --quiet ${dir} ${base}`)
+    writeFileSync(join(dir, 'f.txt'), content)
+    return dir
+  }
+  const run = (contents: string[]) => {
+    writeFileSync(join(root, 'f.txt'), original)
+    const d = new Derby(root, base, contents.map((_, i) => ({ model: 'm', task: 't', title: `w${i}` })), () => {})
+    d.racers.forEach((r, i) => {
+      r.status = 'done'
+      r.dir = worker(`${i}${Math.random().toString(36).slice(2, 6)}`, contents[i]!)
+      r.diffs = [fileDiff('f.txt', original, contents[i]!)]
+    })
+    const res = d.applyAll()
+    d.cleanup()
+    return { res, text: readFileSync(join(root, 'f.txt'), 'utf-8') }
+  }
+  await test('Swarm: edits to different parts of one file are combined', () => {
+    const { res, text } = run([original.replace('line1', 'LINE1'), original.replace('line8', 'LINE8')])
+    return res.merged.includes('f.txt') && text.includes('LINE1') && text.includes('LINE8') && res.conflicts.length === 0
+  })
+  await test('Swarm: overlapping edits keep the earlier thread and are reported', () => {
+    const { res, text } = run([original.replace('line4', 'A'), original.replace('line4', 'B')])
+    return res.conflicts.length === 1 && res.conflicts[0]!.worker === 'w1' && text.includes('A') && !text.includes('<<<<<<<')
+  })
+}
 
 async function testPhase1() {
   const cases: [string, number][] = [

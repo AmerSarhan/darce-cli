@@ -265,6 +265,9 @@ export function toolRisk(name: string, input: Record<string, unknown>, cwd: stri
     case 'Skill':
     case 'Plan':
       return { level: 0, reason: 'read-only' }
+    case 'Agent':
+      // The thread's own steps are scored and approved one by one
+      return { level: 0, reason: 'starts a thread' }
     case 'Remember':
       // Notes about the user follow you into every project, so they're confirmed
       return input.scope === 'user'

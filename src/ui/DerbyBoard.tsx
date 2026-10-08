@@ -10,7 +10,8 @@ function secs(ms: number) {
   return `${Math.round(ms / 1000)}s`
 }
 
-export function DerbyBoard({ task, racers, selected, finished }: { task: string; racers: Racer[]; selected: number; finished: boolean }) {
+export function DerbyBoard({ task, racers, selected, finished, variant = 'derby' }: { task: string; racers: Racer[]; selected: number; finished: boolean; variant?: 'derby' | 'swarm' }) {
+  const swarm = variant === 'swarm'
   const t = theme()
   const { frame } = useAnimation({ interval: 80, isActive: !finished })
   const pick = racers[selected]
@@ -19,7 +20,7 @@ export function DerbyBoard({ task, racers, selected, finished }: { task: string;
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={t.accent} paddingX={1} marginBottom={1}>
       <Box justifyContent="space-between">
-        <Text bold>Derby <Text color={t.muted}>"{task.length > 60 ? task.slice(0, 57) + '…' : task}"</Text></Text>
+        <Text bold>{swarm ? 'Swarm' : 'Derby'} <Text color={t.muted}>"{task.length > 60 ? task.slice(0, 57) + '…' : task}"</Text></Text>
         <Text color={t.faint}>{finished ? 'all finished' : `${racers.filter(r => r.status === 'running' || r.status === 'starting').length} running`}</Text>
       </Box>
       <Box flexDirection="column" marginTop={1}>
@@ -30,9 +31,9 @@ export function DerbyBoard({ task, racers, selected, finished }: { task: string;
           const icon = r.status === 'done' ? '✓' : r.status === 'error' ? '✗' : r.status === 'stopped' ? '■' : FRAMES[frame % FRAMES.length]
           const iconColor = r.status === 'done' ? t.success : r.status === 'error' ? t.danger : t.accent
           return (
-            <Box key={r.model}>
+            <Box key={`${r.model}-${i}`}>
               <Text color={active ? t.accent : t.faint}>{active ? '▸' : ' '} {i + 1} </Text>
-              <Box width={30}><Text bold={active} wrap="truncate-end">{r.model.split('/').pop()}</Text></Box>
+              <Box width={30}><Text bold={active} wrap="truncate-end">{swarm ? r.title : r.model.split('/').pop()}</Text></Box>
               <Text color={iconColor}>{icon} </Text>
               <Box width={26}>
                 {r.status === 'done' || r.status === 'stopped'
@@ -49,7 +50,7 @@ export function DerbyBoard({ task, racers, selected, finished }: { task: string;
       </Box>
       {finished && pick ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text color={t.muted}>{pick.model}{pick.answer ? ': ' : ''}<Text color={t.text}>{pick.answer.trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 220)}</Text></Text>
+          <Text color={t.muted}>{swarm ? pick.title : pick.model}{pick.answer ? ': ' : ''}<Text color={t.text}>{pick.answer.trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 220)}</Text></Text>
           {pick.diffs.slice(0, 2).map(d => (
             <Box key={d.path} flexDirection="column" marginTop={1}>
               <Text>{d.path}</Text>
@@ -63,8 +64,10 @@ export function DerbyBoard({ task, racers, selected, finished }: { task: string;
       <Box marginTop={1}>
         <Text color={t.faint}>
           {finished
-            ? <><Text color={t.accent}>1-{racers.length} / ↑↓</Text> compare   <Text color={t.accent}>enter</Text> apply this one   <Text color={t.accent}>esc</Text> discard all</>
-            : <><Text color={t.accent}>esc</Text> stop the race</>}
+            ? swarm
+              ? <><Text color={t.accent}>1-{racers.length} / ↑↓</Text> inspect   <Text color={t.accent}>enter</Text> merge all threads   <Text color={t.accent}>esc</Text> discard all</>
+              : <><Text color={t.accent}>1-{racers.length} / ↑↓</Text> compare   <Text color={t.accent}>enter</Text> apply this one   <Text color={t.accent}>esc</Text> discard all</>
+            : <><Text color={t.accent}>esc</Text> {swarm ? 'stop the swarm' : 'stop the race'}</>}
         </Text>
       </Box>
     </Box>

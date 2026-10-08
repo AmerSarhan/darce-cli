@@ -47,6 +47,8 @@ export function toolSummary(name: string, input: Record<string, unknown>): strin
     case 'WebSearch': return `"${s(input.query)}"`
     case 'Skill': return s(input.name)
     case 'Remember': return `${s(input.scope)}: ${s(input.note)}`
+    case 'Agent': return `${s(input.kind) === 'work' ? 'work' : 'explore'} · ${s(input.description)}`
+    case 'Image': return displayPath(s(input.file_path))
     default: return ''
   }
 }

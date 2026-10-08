@@ -55,6 +55,15 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 - **Free tier** — start without a credit card or an API key.
 - **Open source** — MIT licensed.
 
+## What's New in 0.12.0
+
+- **Threads.** Darce can start sub-agents with their own fresh context. Several research threads run at the same time, and a work thread can take on a self-contained change. You see each thread live, and `/threads` shows every thread's steps and report.
+- **Swarms.** `/swarm add search, pagination and an export button` has a lead agent split the task into 2-4 independent parts. Each part runs as a thread in its own git worktree, in parallel. Review them side by side, then merge everything with Enter: edits to the same file are combined, and `/undo` reverts the whole swarm.
+- **Images.** Darce can generate images into your project (icons, illustrations, hero images, or edits of an existing image) with Seedream 5.0 Flash. Each image counts as 3 requests.
+- **WHY notes.** When a change involved something genuinely worth knowing, Darce ends with a short WHY note. Routine changes get none. `/why off` turns it off.
+- **Safer by default.** A security audit tightened command approvals, how a repository's own settings and instructions are trusted, and the permissions of your key and session files.
+- A model that stops responding is retried once and then reported, instead of leaving Darce waiting.
+
 ## What's New in 0.11.0
 
 - **Easier model picking.** `/model` (or Ctrl+P) now opens with your recent models, then OpenRouter's live **most popular** ranking, then everything else. Each row shows a friendly name, vendor, price level ($ to $$$$), context size and what it can do. Search matches every word you type and ranks results by popularity.
@@ -219,9 +228,11 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 | `/mode` | Show or set the approval mode |
 | `/rewind` | Scrub through every change and rewind files + conversation (also Esc twice) |
 | `/derby [--models a,b,c] <task>` | Race models on a task in separate worktrees and apply the best |
+| `/swarm <task>` | Split a task into parallel threads, each in its own worktree, then merge them all |
+| `/threads [n]` | List this session's threads, or show one thread's steps and report |
 | `/critic on\|off [model]` | Second-opinion review of every edit by another vendor's model |
 | `/security [changes]` | Security review of the project or your uncommitted changes |
-| `/learn on\|off` | Darce explains the concepts behind each change |
+| `/why on\|off` | Short WHY notes when a change involved something worth learning (on by default) |
 | `/suggest on\|off` | Predict your next prompt after each task (Tab accepts) |
 | `/skills` | List available skills |
 | `/memory [forget <text>]` | What Darce remembers about you and this project |

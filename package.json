@@ -1,6 +1,6 @@
 {
   "name": "darce-cli",
-  "version": "0.11.3",
+  "version": "0.12.0",
   "description": "A blazing-fast AI coding agent for your terminal",
   "type": "module",
   "bin": {

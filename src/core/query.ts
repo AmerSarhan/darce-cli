@@ -1,4 +1,4 @@
-import type { Message, StreamEvent, ToolContext, ContentBlock, ToolUseContent, ToolDisplay } from '../types.js'
+import type { Message, StreamEvent, ToolContext, ContentBlock, ToolUseContent, ToolDisplay, SpawnRequest } from '../types.js'
 import type { Provider, OpenRouterTool } from '../providers/provider.js'
 import { getTool, allTools } from '../tools/registry.js'
 import { toAPITools } from '../tools/registry.js'
@@ -22,6 +22,10 @@ export type QueryParams = {
   authorize?: (call: { id: string; name: string; input: Record<string, unknown> }) => Promise<{ allow: true; via?: string } | { allow: false; reason: string }>
   /** Called right before a tool that changes the project runs (used for undo snapshots). */
   beforeChange?: (call: { id: string; name: string; input: Record<string, unknown> }) => void
+  /** Limit which tools the model is offered (threads get a subset) */
+  toolFilter?: (name: string) => boolean
+  /** Lets the Agent tool start sub-agent threads */
+  spawnAgent?: (req: SpawnRequest) => Promise<{ report: string; isError?: boolean }>
 }
 
 export type QueryResult = {
@@ -33,7 +37,8 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
   const { provider, systemPrompt, maxTurns = 50 } = params
   let messages = [...params.messages]
   let turnCount = 0
-  const tools = toAPITools()
+  // Threads only exist where something can run them (the interactive app)
+  const tools = toAPITools().filter(t => (t.function.name !== 'Agent' || !!params.spawnAgent) && (!params.toolFilter || params.toolFilter(t.function.name)))
   const retriedToolIds = new Set<string>()
 
   const toolContext: ToolContext = {
@@ -41,6 +46,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
     readFiles: params.readFiles,
     abortSignal: params.abortSignal,
     passEnv: params.passEnv,
+    spawnAgent: params.spawnAgent,
   }
 
   // Prepend system message
@@ -104,19 +110,6 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
     // Execute tools
     debug(`Executing ${toolUseBlocks.length} tool(s)`)
 
-    // Separate concurrent-safe and sequential tools
-    const concurrent: ToolUseContent[] = []
-    const sequential: ToolUseContent[] = []
-
-    for (const block of toolUseBlocks) {
-      const tool = getTool(block.name)
-      if (tool?.isReadOnly && tool?.isConcurrencySafe) {
-        concurrent.push(block)
-      } else {
-        sequential.push(block)
-      }
-    }
-
     async function executeTool(block: ToolUseContent): Promise<{ block: ToolUseContent; result: string; isError?: boolean; display?: ToolDisplay }> {
       const tool = getTool(block.name)
       if (!tool) {
@@ -136,62 +129,61 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
       }
     }
 
-    // Execute all tools and yield live events
-    const allBlocks = [...concurrent, ...sequential]
-    for (const block of allBlocks) {
-      // Every tool_use needs a tool_result, even when the user stops Darce mid-way
-      if (params.abortSignal?.aborted) {
-        messages.push({
-          role: 'user',
-          content: [{ type: 'tool_result', tool_use_id: block.id, content: 'Not run: the user interrupted.', is_error: true }],
-        })
-        continue
-      }
+    const record = (id: string, content: string, isError?: boolean) => {
+      messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: isError }] })
+    }
 
+    // Approve one call (approvals are always asked one at a time)
+    async function approve(block: ToolUseContent): Promise<{ ok: true; via?: string } | { ok: false; denied: string }> {
+      if (params.abortSignal?.aborted) return { ok: false, denied: 'Not run: the user interrupted.' }
       const decision = params.authorize
         ? await params.authorize({ id: block.id, name: block.name, input: block.input })
         : { allow: true as const }
+      return decision.allow ? { ok: true, via: decision.via } : { ok: false, denied: `Not run: ${decision.reason}` }
+    }
 
-      if (!decision.allow) {
-        const denied = `Not run: ${decision.reason}`
-        yield { type: 'tool_result_ready', id: block.id, name: block.name, result: denied, isError: true, durationMs: 0, denied: true }
-        messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: block.id, content: denied, is_error: true }] })
+    function finish(block: ToolUseContent, executed: { result: string; isError?: boolean; display?: ToolDisplay }, started: number): StreamEvent {
+      // Never send credentials to the model, even if a file or command printed them
+      const { text: result, count: redacted } = redactSecrets(executed.result)
+      if (executed.isError && !retriedToolIds.has(block.id)) retriedToolIds.add(block.id)
+      record(block.id, result, executed.isError)
+      return { type: 'tool_result_ready', id: block.id, name: block.name, result, isError: executed.isError, durationMs: Date.now() - started, display: executed.display, redacted }
+    }
+
+    // Run the calls in the model's order. Consecutive read-only, concurrency-safe calls (reads,
+    // searches, research threads) run at the same time; anything that changes the project runs alone.
+    debug(`Executing ${toolUseBlocks.length} tool(s)`)
+    let i = 0
+    while (i < toolUseBlocks.length) {
+      const first = toolUseBlocks[i]!
+      const parallelOk = (b: ToolUseContent) => { const t = getTool(b.name); return !!(t?.isReadOnly && t?.isConcurrencySafe) }
+      const batch: ToolUseContent[] = [first]
+      if (parallelOk(first)) while (i + batch.length < toolUseBlocks.length && parallelOk(toolUseBlocks[i + batch.length]!)) batch.push(toolUseBlocks[i + batch.length]!)
+      i += batch.length
+
+      const approved: { block: ToolUseContent; via?: string }[] = []
+      for (const block of batch) {
+        const a = await approve(block)
+        if (!a.ok) {
+          if (!params.abortSignal?.aborted) yield { type: 'tool_result_ready', id: block.id, name: block.name, result: a.denied, isError: true, durationMs: 0, denied: true }
+          record(block.id, a.denied, true)
+        } else approved.push({ block, via: a.via })
+      }
+      if (!approved.length) continue
+
+      if (approved.length === 1) {
+        const { block, via } = approved[0]!
+        if (!getTool(block.name)?.isReadOnly) params.beforeChange?.({ id: block.id, name: block.name, input: block.input })
+        yield { type: 'tool_executing', id: block.id, name: block.name, input: block.input, via }
+        const started = Date.now()
+        yield finish(block, await executeTool(block), started)
         continue
       }
 
-      if (!getTool(block.name)?.isReadOnly) params.beforeChange?.({ id: block.id, name: block.name, input: block.input })
-
-      yield { type: 'tool_executing', id: block.id, name: block.name, input: block.input, via: decision.via }
-
+      for (const { block, via } of approved) yield { type: 'tool_executing', id: block.id, name: block.name, input: block.input, via }
       const started = Date.now()
-      const executed = await executeTool(block)
-      const isError = executed.isError
-      // Never send credentials to the model, even if a file or command printed them
-      const { text: result, count: redacted } = redactSecrets(executed.result)
-      const durationMs = Date.now() - started
-
-      // Track retried tool IDs to avoid infinite retry loops
-      if (isError) {
-        if (retriedToolIds.has(block.id)) {
-          debug(`Tool ${block.name} (${block.id}) already retried, not retrying again`)
-        } else {
-          retriedToolIds.add(block.id)
-          debug(`Tool ${block.name} (${block.id}) errored, marking for retry`)
-        }
-      }
-
-      yield { type: 'tool_result_ready', id: block.id, name: block.name, result, isError, durationMs, display: executed.display, redacted }
-
-      // Add to message history for the model
-      messages.push({
-        role: 'user',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: result,
-          is_error: isError,
-        }],
-      })
+      const done = await Promise.all(approved.map(({ block }) => executeTool(block)))
+      for (const executed of done) yield finish(executed.block, executed, started)
     }
 
     if (params.abortSignal?.aborted) {

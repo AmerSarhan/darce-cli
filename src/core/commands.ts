@@ -130,6 +130,16 @@ const COMMANDS: SlashCommand[] = [
     execute: (args) => `__DERBY__:${args}`,
   },
   {
+    name: 'swarm',
+    description: 'Split a big task into parallel threads, each in its own worktree, then merge',
+    execute: (args) => `__SWARM__:${args}`,
+  },
+  {
+    name: 'threads',
+    description: 'List this session\'s threads, or show one: /threads 2',
+    execute: (args) => `__THREADS__:${args.trim()}`,
+  },
+  {
     name: 'critic',
     description: 'Another vendor\'s model reviews every edit',
     execute: (args) => `__CRITIC__:${args.trim()}`,
@@ -189,7 +199,7 @@ export function executeCommand(input: string, context: CommandContext): string |
 
 /** Argument hints shown in the slash menu for commands that take input. */
 const ARG_HINTS: Record<string, string> = {
-  model: '[search]', derby: '<task>', critic: 'on|off', mode: 'auto|ask|plan|full', upgrade: 'builder|power',
+  model: '[search]', derby: '<task>', swarm: '<task>', threads: '[number]', critic: 'on|off', mode: 'auto|ask|plan|full', upgrade: 'builder|power',
   memory: '[forget <text>]', account: '[switch <email>]', security: '[changes]', why: 'on|off', suggest: 'on|off',
 }
 
