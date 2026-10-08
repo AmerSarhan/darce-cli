@@ -41,6 +41,7 @@ import { Derby, defaultRacers } from '../core/derby.js'
 import { pickCritic, reviewEdit } from '../core/critic.js'
 import { DEFAULT_GEARS, gearIndex, shiftGear, priceNote } from '../config/gears.js'
 import { createCheckout, openInBrowser } from '../core/billing.js'
+import { DISCORD_URL } from '../community.js'
 import { readMemory, memoryPath, forget } from '../core/memory.js'
 import { listAccounts, addAccount, switchAccount, removeAccount, fetchAccount } from '../auth/accounts.js'
 import { browserLogin } from '../auth/browserLogin.js'
@@ -646,6 +647,12 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       return
     }
     if (result === '__REWIND__') { openTape(); return }
+    if (result === '__COMMUNITY__') {
+      commit({ kind: 'user', id: newId(), text })
+      openInBrowser(DISCORD_URL)
+      commit({ kind: 'system', id: newId(), text: `Opening the Darce Discord: ${DISCORD_URL}\nAsk for help, share what you built, and tell us what to fix.` })
+      return
+    }
     const useAccount = (apiKey: string, apiBase?: string) => {
       provider.setCredentials?.(apiKey, apiBase)
       setState(prev => ({ ...prev, config: { ...prev.config, apiKey, apiBase: apiBase ?? prev.config.apiBase } }))

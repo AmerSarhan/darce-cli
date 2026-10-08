@@ -2,6 +2,8 @@ import React, { useEffect } from 'react'
 import { Box, Text, useAnimation } from 'ink'
 import { theme } from './theme.js'
 import { mix, reducedMotion } from './Spinner.js'
+import { webLink } from './termfx.js'
+import { DISCORD_URL } from '../community.js'
 
 // Two-line block wordmark: D A R C E
 const WORDMARK = ['█▀▄ ▄▀█ █▀█ █▀▀ █▀▀', '█▄▀ █▀█ █▀▄ █▄▄ ██▄']
@@ -86,6 +88,7 @@ export function Welcome({ info }: { info: WelcomeInfo }) {
         {key('shift+↑↓', 'change model')}
         {key('shift+tab', 'approval mode')}
       </Box>
+      <Text color={t.faint}>community  <Text color={t.muted}>{webLink(DISCORD_URL.replace('https://', ''), DISCORD_URL)}</Text>  or /community</Text>
     </Box>
   )
 }

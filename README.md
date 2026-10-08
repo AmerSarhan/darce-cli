@@ -3,6 +3,7 @@
   <img src="https://img.shields.io/npm/dw/darce-cli?style=flat-square&color=10b981" alt="downloads">
   <img src="https://img.shields.io/github/stars/AmerSarhan/darce-cli?style=flat-square&color=10b981" alt="stars">
   <img src="https://img.shields.io/github/license/AmerSarhan/darce-cli?style=flat-square" alt="license">
+  <a href="https://discord.gg/Js65REPY8"><img src="https://img.shields.io/badge/Discord-join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
 </p>
 
 <h1 align="center">Darce</h1>
@@ -18,7 +19,8 @@
   <a href="https://www.npmjs.com/package/darce-cli">npm</a> &middot;
   <a href="#get-started">Get Started</a> &middot;
   <a href="https://cli.darce.dev/#pricing">Pricing</a> &middot;
-  <a href="https://cli.darce.dev/dashboard">Dashboard</a>
+  <a href="https://cli.darce.dev/dashboard">Dashboard</a> &middot;
+  <a href="https://discord.gg/Js65REPY8">Discord</a>
 </p>
 
 ---
@@ -224,6 +226,7 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 | `/skills` | List available skills |
 | `/memory [forget <text>]` | What Darce remembers about you and this project |
 | `/login`, `/account`, `/logout` | Browser sign-in, plan and usage, switch accounts |
+| `/community` | Join the Darce Discord |
 | `/quit` | Exit (`/q` alias) |
 
 ## Config
@@ -302,6 +305,10 @@ Darce looks in `.darce/skills/` and `.claude/skills/` (project), then `~/.darce/
   "scrapify": { "url": "https://your-scrapify-host", "token": "…" }
 }
 ```
+
+## Community
+
+Questions, ideas, bugs, or something cool you built with Darce? Join us on **[Discord](https://discord.gg/Js65REPY8)**, or type `/community` inside Darce.
 
 ## Contributing
 

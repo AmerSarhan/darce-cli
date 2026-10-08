@@ -60,3 +60,9 @@ export function link(text: string, absPath: string): string {
   const url = isVSCode ? `vscode://file${absPath}` : `file://${absPath}`
   return `\x1b]8;;${encodeURI(url)}\x07${text}\x1b]8;;\x07`
 }
+
+/** Clickable web link (https://…); falls back to plain text. */
+export function webLink(text: string, url: string): string {
+  if (!caps.links) return text
+  return `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`
+}

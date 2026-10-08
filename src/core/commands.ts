@@ -108,6 +108,12 @@ const COMMANDS: SlashCommand[] = [
     execute: (args) => `__LEARN__:${args.trim().toLowerCase()}`,
   },
   {
+    name: 'community',
+    aliases: ['discord'],
+    description: 'Join the Darce Discord: help, feedback and releases',
+    execute: () => '__COMMUNITY__',
+  },
+  {
     name: 'upgrade',
     description: 'Upgrade: Builder $15/mo or Power $65/mo',
     execute: (args) => `__UPGRADE__:${args.trim().toLowerCase()}`,
