@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { addAccount } from './accounts.js'
 import { browserLogin } from './browserLogin.js'
+import { writePrivate } from '../utils/privateFile.js'
 
 const API_BASE = process.env.DARCE_API_BASE || 'https://api.darce.dev'
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -89,8 +90,7 @@ export function saveCredentials(apiKey: string, email = '') {
   existing.apiKey = apiKey
   existing.apiBase = API_BASE
 
-  mkdirSync(join(homedir(), '.darce'), { recursive: true })
-  writeFileSync(rcPath, JSON.stringify(existing, null, 2) + '\n', { mode: 0o600 })
+  writePrivate(rcPath, JSON.stringify(existing, null, 2) + '\n')
 }
 
 let lastEmail = ''

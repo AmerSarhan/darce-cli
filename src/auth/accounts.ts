@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { writePrivate } from '../utils/privateFile.js'
 
 /**
  * Saved Darce accounts. The active one is mirrored into ~/.darcerc (apiKey/apiBase)
@@ -21,8 +22,7 @@ function load(): Store {
 }
 
 function save(store: Store) {
-  mkdirSync(join(homedir(), '.darce'), { recursive: true })
-  writeFileSync(STORE(), JSON.stringify(store, null, 2), { mode: 0o600 })
+  writePrivate(STORE(), JSON.stringify(store, null, 2))
 }
 
 function writeRc(account: Account | null) {
@@ -35,7 +35,7 @@ function writeRc(account: Account | null) {
     delete rc.apiKey
     delete rc.apiBase
   }
-  writeFileSync(RC(), JSON.stringify(rc, null, 2) + '\n', { mode: 0o600 })
+  writePrivate(RC(), JSON.stringify(rc, null, 2) + '\n')
 }
 
 export function listAccounts(): { active?: string; accounts: Account[] } {

@@ -152,14 +152,15 @@ async function upgradeFlow() {
   console.log(`\n  Open this link to upgrade:\n`)
   console.log(`  ${data.url}\n`)
 
-  // Try to open browser automatically
-  const { exec } = await import('node:child_process')
-  const openCmd = process.platform === 'win32' ? 'start' : process.platform === 'darwin' ? 'open' : 'xdg-open'
-  exec(`${openCmd} "${data.url}"`)
+  // Try to open browser automatically (no shell, https only)
+  const { openInBrowser } = await import('../core/billing.js')
+  if (data.url) openInBrowser(data.url)
 }
 
 // === Main REPL ===
 async function main(modelOverride?: string, initialPrompt?: string, resumeSession?: boolean) {
+  const { lockDownDarceFiles } = await import('../utils/privateFile.js')
+  lockDownDarceFiles()
   const { loadConfig } = await import('../config/config.js')
   const config = loadConfig()
 

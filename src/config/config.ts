@@ -42,9 +42,26 @@ function deepMerge(target: Record<string, unknown>, ...sources: (Record<string, 
   return result
 }
 
+const PROJECT_SAFE_KEYS = new Set(['theme', 'router'])
+
+function pickProjectSettings(rc: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!rc) return null
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(rc)) {
+    if (!PROJECT_SAFE_KEYS.has(k)) continue
+    if (k === 'router' && v && typeof v === 'object') {
+      const def = (v as Record<string, unknown>).default
+      if (typeof def === 'string') out.router = { default: def }
+    } else out[k] = v
+  }
+  return out
+}
+
 export function loadConfig(): DarceConfig {
   const globalRc = readJsonSafe(join(homedir(), '.darcerc'))
-  const projectRc = readJsonSafe(join(process.cwd(), '.darcerc'))
+  // A project's own .darcerc comes with the repo, so it can't be trusted with keys, endpoints or
+  // approval settings: only presentation and model choice are taken from it.
+  const projectRc = pickProjectSettings(readJsonSafe(join(process.cwd(), '.darcerc')))
 
   const envOverrides: Record<string, unknown> = {}
   if (process.env.DARCE_API_KEY) envOverrides.apiKey = process.env.DARCE_API_KEY

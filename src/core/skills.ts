@@ -79,15 +79,16 @@ function mtime(p: string): number {
 
 const cache = new Map<string, Skill[]>()
 
-/** All available skills; earlier sources win on name clashes (project overrides user overrides built-in). */
+/** All available skills; earlier sources win on name clashes. Your own skills win over ones that
+ *  came with a repository, so a cloned project can't replace a skill you rely on. */
 export function discoverSkills(cwd: string): Skill[] {
   const hit = cache.get(cwd)
   if (hit) return hit
   const sources: Array<[Skill['source'], string, number]> = [
-    ['project', join(cwd, '.darce', 'skills'), 2],
-    ['project', join(cwd, '.claude', 'skills'), 2],
     ['user', join(homedir(), '.darce', 'skills'), 3],
     ['claude', join(homedir(), '.claude', 'skills'), 3],
+    ['project', join(cwd, '.darce', 'skills'), 2],
+    ['project', join(cwd, '.claude', 'skills'), 2],
     ...pluginSkillRoots().map(r => ['plugin', r, 2] as [Skill['source'], string, number]),
   ]
   const seen = new Set<string>()

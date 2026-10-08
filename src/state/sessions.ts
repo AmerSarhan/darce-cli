@@ -2,17 +2,18 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { Message } from '../types.js'
+import { writePrivate } from '../utils/privateFile.js'
 
 const SESSIONS_DIR = join(homedir(), '.darce', 'sessions')
 
 function ensureDir() {
-  if (!existsSync(SESSIONS_DIR)) mkdirSync(SESSIONS_DIR, { recursive: true })
+  if (!existsSync(SESSIONS_DIR)) mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 })
 }
 
 export function saveSession(sessionId: string, messages: Message[], cwd: string) {
   ensureDir()
   const data = { sessionId, cwd, messages, savedAt: new Date().toISOString() }
-  writeFileSync(join(SESSIONS_DIR, `${sessionId}.json`), JSON.stringify(data))
+  writePrivate(join(SESSIONS_DIR, `${sessionId}.json`), JSON.stringify(data))
 }
 
 export function loadLatestSession(cwd: string): { sessionId: string; messages: Message[] } | null {

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
+import { writePrivate } from '../utils/privateFile.js'
 
 // Prompt history shared across sessions (newest first)
 const HISTORY_PATH = join(homedir(), '.darce', 'prompt-history.json')
@@ -16,7 +17,6 @@ export function loadHistory(): string[] {
 
 export function saveHistory(history: string[]) {
   try {
-    mkdirSync(dirname(HISTORY_PATH), { recursive: true })
-    writeFileSync(HISTORY_PATH, JSON.stringify(history.slice(0, 200)), { mode: 0o600 })
+    writePrivate(HISTORY_PATH, JSON.stringify(history.slice(0, 200)))
   } catch {}
 }

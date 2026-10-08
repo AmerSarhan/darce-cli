@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, existsSync, symlinkSync, copyFileSync, mkdirSync, rmSync, unlinkSync, readFileSync } from 'node:fs'
+import { mkdtempSync, existsSync, symlinkSync, copyFileSync, mkdirSync, rmSync, unlinkSync, readFileSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve, relative, isAbsolute } from 'node:path'
 import { query } from './query.js'
 import { toolRisk } from './risk.js'
 import { buildSystemPrompt } from './context.js'
@@ -52,7 +52,10 @@ export class Derby {
     this.racers = models.map(model => ({ model, status: 'starting', activity: 'setting up', steps: 0, cost: 0, ms: 0, answer: '', diffs: [] }))
   }
 
-  async run(task: string, history: Message[], provider: Provider, passEnv?: string[]): Promise<void> {
+  private mode: 'ask' | 'auto' | 'full' = 'auto'
+
+  async run(task: string, history: Message[], provider: Provider, passEnv?: string[], mode: 'ask' | 'auto' | 'full' = 'auto'): Promise<void> {
+    this.mode = mode
     await Promise.all(this.racers.map(r => this.race(r, task, history, provider, passEnv)))
   }
 
@@ -86,7 +89,9 @@ export class Derby {
         // Racers run unattended: anything beyond the project is declined, never asked
         authorize: async call => {
           const risk = toolRisk(call.name, call.input, r.dir!)
-          return risk.level <= 1 ? { allow: true as const } : { allow: false as const, reason: `declined during a derby (${risk.reason}).` }
+          // In ask mode racers may read and edit their worktree, but not run commands unasked
+          const ok = risk.level === 0 || (risk.level === 1 && (this.mode !== 'ask' || call.name !== 'Bash'))
+          return ok ? { allow: true as const } : { allow: false as const, reason: `declined during a derby (${risk.reason}).` }
         },
       })
       let result = await gen.next()
@@ -135,8 +140,14 @@ export class Derby {
     const r = this.racers[i]!
     if (!r.dir) return { files: 0 }
     for (const d of r.diffs) {
-      const target = join(this.root, d.path)
+      const target = resolve(this.root, d.path)
       const source = join(r.dir, d.path)
+      // Never write outside the repository, and never copy a symlink's target in
+      const rel = relative(this.root, target)
+      if (rel.startsWith('..') || isAbsolute(rel)) continue
+      let link = false
+      try { link = lstatSync(source).isSymbolicLink() } catch {}
+      if (link) continue
       if (existsSync(source)) {
         mkdirSync(dirname(target), { recursive: true })
         copyFileSync(source, target)

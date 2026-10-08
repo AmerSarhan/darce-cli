@@ -83,7 +83,44 @@ export class OpenRouterProvider implements Provider {
     if (baseUrl) this.baseUrl = baseUrl
   }
 
+  /**
+   * Stream one completion. A watchdog cancels the request when nothing arrives for STALL_MS
+   * (OpenRouter sends keep-alive comments while a model thinks, so silence means a stuck provider).
+   * A stall before any output is retried once; a stall mid-answer is reported instead of hanging.
+   */
   async *stream(messages: Message[], model: string, tools: OpenRouterTool[], signal?: AbortSignal): AsyncGenerator<StreamEvent> {
+    const STALL_MS = Number(process.env.DARCE_STALL_MS) || 90_000
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const stall = new AbortController()
+      const forward = () => stall.abort()
+      if (signal?.aborted) return
+      signal?.addEventListener('abort', forward, { once: true })
+      let stalled = false
+      let produced = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const arm = () => { clearTimeout(timer); timer = setTimeout(() => { stalled = true; stall.abort() }, STALL_MS) }
+      arm()
+      try {
+        for await (const ev of this.streamOnce(messages, model, tools, stall.signal, arm)) {
+          if (ev.type !== 'request_start') produced = true
+          yield ev
+        }
+      } finally {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', forward)
+      }
+      if (!stalled || signal?.aborted) return
+      const secs = Math.round(STALL_MS / 1000)
+      if (produced) {
+        yield { type: 'error', error: `${model} stopped responding for ${secs}s mid-answer. Send your message again, or switch model with Shift+↑/↓.` }
+        return
+      }
+      debug(`No response from ${model} in ${secs}s, retrying once`)
+    }
+    yield { type: 'error', error: `${model} didn't respond after two tries. Its provider may be overloaded: switch model with Shift+↑/↓ or /model.` }
+  }
+
+  private async *streamOnce(messages: Message[], model: string, tools: OpenRouterTool[], signal: AbortSignal, onActivity: () => void): AsyncGenerator<StreamEvent> {
     yield { type: 'request_start' }
 
     const body: Record<string, unknown> = {
@@ -113,6 +150,7 @@ export class OpenRouterProvider implements Provider {
           signal,
         })
 
+        onActivity()
         if (response.status === 429 && retries < maxRetries) {
           retries++
           const delay = Math.min(1000 * Math.pow(2, retries), 8000)
@@ -124,7 +162,9 @@ export class OpenRouterProvider implements Provider {
 
         if (!response.ok) {
           const errorText = await response.text()
-          yield { type: 'error', error: `API error ${response.status}: ${errorText}` }
+          let message = errorText
+          try { const j = JSON.parse(errorText); message = j.message || j.error?.message || (typeof j.error === 'string' ? j.error : '') || errorText } catch {}
+          yield { type: 'error', error: response.status === 403 || response.status === 429 ? message : `API error ${response.status}: ${message}` }
           return
         }
 
@@ -165,6 +205,7 @@ export class OpenRouterProvider implements Provider {
         }
         const { done, value } = readResult
         if (done) break
+        onActivity()
 
         buffer += decoder.decode(value, { stream: true })
         const { frames, remaining } = parseSSEFrames(buffer)

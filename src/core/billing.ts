@@ -1,4 +1,4 @@
-import { exec } from 'node:child_process'
+import { execFile } from 'node:child_process'
 
 export type CheckoutResult = { url: string } | { error: string; alreadyPaid?: boolean }
 
@@ -22,6 +22,10 @@ export async function createCheckout(apiKey: string, apiBase = 'https://api.darc
 
 export function openInBrowser(url: string) {
   if (process.env.DARCE_NO_BROWSER) return
-  const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`
-  exec(cmd, () => {})
+  // Only real web links, and never through a shell: a URL can't smuggle in a command
+  let u: URL
+  try { u = new URL(url) } catch { return }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return
+  if (process.platform === 'win32') execFile('rundll32', ['url.dll,FileProtocolHandler', u.href], () => {})
+  else execFile(process.platform === 'darwin' ? 'open' : 'xdg-open', [u.href], () => {})
 }

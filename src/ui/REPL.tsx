@@ -25,7 +25,7 @@ import type { ContentBlock, Message } from '../types.js'
 import type { Provider } from '../providers/provider.js'
 import { VERSION } from '../version.js'
 import { PermissionPrompt, type PermissionRequest } from './PermissionPrompt.js'
-import { toolRisk, trustKey } from '../core/risk.js'
+import { toolRisk, trustKey, isSimpleCommand } from '../core/risk.js'
 import { Checkpoints } from '../core/checkpoints.js'
 import { trustedKeys, addTrust } from '../state/trust.js'
 import { setTitle, setProgress, notify } from './termfx.js'
@@ -346,7 +346,9 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       const risk = toolRisk(call.name, call.input, state.cwd)
       receipt.maxRisk = Math.max(receipt.maxRisk, risk.level) as ReceiptData['maxRisk']
       const mode = modeRef.current
-      const key = call.name === 'Bash' ? trustKey(String(call.input.command ?? '')) : undefined
+      // "Always allow" covers one plain command only, never chains like `npm install && curl …`
+      const cmdText = String(call.input.command ?? '')
+      const key = call.name === 'Bash' && isSimpleCommand(cmdText) ? trustKey(cmdText) : undefined
       if (risk.level === 0 || mode === 'full') return { allow: true as const }
       if (mode === 'plan') return { allow: false as const, reason: 'plan mode is on (read-only). Describe the change instead of making it.' }
       if (key && risk.level < 3 && trustedKeys(state.cwd).has(key)) return { allow: true as const, via: 'trusted' }
@@ -560,6 +562,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const m = rest.match(/^--models\s+(\S+)\s*/)
     if (m) { models = m[1]!.split(',').filter(Boolean); rest = rest.slice(m[0].length) }
     if (!rest) { commit({ kind: 'system', id: newId(), text: 'Usage: /derby [--models a,b,c] <task>\nRaces up to 3 models on the task, each in its own git worktree. Your files are untouched until you pick a winner.' }); return }
+    if (modeRef.current === 'plan') { commit({ kind: 'system', id: newId(), text: '/derby makes changes, and plan mode is read-only. Switch mode with Shift+Tab first.' }); return }
     const cps = checkpointsRef.current!
     const base = cps.commitWorkingTree('darce derby base')
     if (!base || !cps.gitRoot) { commit({ kind: 'system', id: newId(), text: '/derby needs a git repository: each model works in its own worktree.' }); return }
@@ -571,7 +574,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setTitle('darce · derby')
     setProgress('busy')
     const started = Date.now()
-    await d.run(rest, messagesRef.current, provider, state.config.passEnv)
+    await d.run(rest, messagesRef.current, provider, state.config.passEnv, modeRef.current as 'ask' | 'auto' | 'full')
     setProgress('off')
     setTitle('darce')
     if (Date.now() - started >= 20_000) notify('Derby finished', 'Pick a winner')

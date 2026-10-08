@@ -1,5 +1,6 @@
 import { parse } from 'shell-quote'
-import { resolve, relative, isAbsolute } from 'node:path'
+import { resolve, relative, isAbsolute, dirname } from 'node:path'
+import { realpathSync, existsSync } from 'node:fs'
 
 /**
  * Risk levels for tool calls:
@@ -13,18 +14,26 @@ export type Risk = { level: RiskLevel; reason: string }
 
 const READ_ONLY = new Set([
   'ls', 'll', 'la', 'cat', 'head', 'tail', 'less', 'more', 'wc', 'pwd', 'echo', 'printf', 'grep', 'rg', 'ag', 'egrep', 'fgrep',
-  'tree', 'which', 'whereis', 'type', 'file', 'stat', 'du', 'df', 'date', 'whoami', 'uname', 'env', 'printenv', 'id',
-  'diff', 'cmp', 'sort', 'uniq', 'cut', 'tr', 'jq', 'yq', 'basename', 'dirname', 'realpath', 'readlink', 'nl', 'column',
-  'true', 'false', 'test', '[', 'sleep', 'ps', 'top', 'uptime', 'history', 'man', 'tldr', 'cal', 'bat', 'fd', 'awk',
+  'tree', 'which', 'whereis', 'type', 'file', 'stat', 'du', 'df', 'date', 'whoami', 'uname', 'printenv', 'id',
+  'diff', 'cmp', 'uniq', 'cut', 'tr', 'jq', 'yq', 'basename', 'dirname', 'realpath', 'readlink', 'nl', 'column',
+  'true', 'false', 'test', '[', 'sleep', 'ps', 'top', 'uptime', 'history', 'man', 'tldr', 'cal', 'bat',
 ])
 
-const GIT_READ = new Set(['status', 'log', 'diff', 'show', 'branch', 'remote', 'rev-parse', 'ls-files', 'blame', 'describe', 'tag', 'shortlog', 'reflog', 'grep', 'config', 'stash'])
-const GIT_WRITE_LOCAL = new Set(['add', 'commit', 'checkout', 'switch', 'restore', 'merge', 'rebase', 'cherry-pick', 'revert', 'mv', 'rm', 'init', 'worktree'])
+// Commands that run another command: score the wrapped command instead
+const WRAPPERS = new Set(['env', 'xargs', 'timeout', 'nice', 'nohup', 'command', 'builtin', 'exec', 'time', 'stdbuf', 'caffeinate', 'unbuffer'])
+// Interpreters: running a project file is "changes the project", but inline code is opaque
+const INTERPRETERS = new Set(['node', 'nodejs', 'tsx', 'ts-node', 'python', 'python3', 'ruby', 'php', 'perl', 'deno', 'bun', 'lua', 'Rscript', 'osascript'])
+const INLINE_FLAGS = new Set(['-e', '-c', '-p', '-r', '-E', '--eval', '--print', '-pe', '-ne', '-le'])
+// Download-and-run package runners
+const RUNNERS = new Set(['npx', 'bunx', 'pnpx', 'uvx', 'pipx'])
+
+const GIT_READ = new Set(['status', 'log', 'diff', 'show', 'branch', 'remote', 'rev-parse', 'ls-files', 'blame', 'describe', 'tag', 'shortlog', 'reflog', 'grep'])
+const GIT_WRITE_LOCAL = new Set(['add', 'commit', 'checkout', 'switch', 'restore', 'merge', 'rebase', 'cherry-pick', 'revert', 'mv', 'rm', 'init', 'worktree', 'stash'])
 const GIT_NETWORK = new Set(['push', 'pull', 'fetch', 'clone', 'submodule'])
 
 const PKG_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3', 'poetry', 'uv', 'cargo', 'go', 'gem', 'bundle', 'composer', 'mvn', 'gradle', 'dotnet', 'deno'])
 const PKG_INSTALL = new Set(['install', 'i', 'add', 'update', 'upgrade', 'up', 'remove', 'rm', 'uninstall', 'un', 'get', 'publish', 'link', 'ci', 'sync', 'dlx', 'exec', 'x'])
-const BUILD_TOOLS = new Set(['tsc', 'eslint', 'prettier', 'jest', 'vitest', 'mocha', 'pytest', 'ruff', 'black', 'mypy', 'make', 'cmake', 'node', 'tsx', 'ts-node', 'python', 'python3', 'ruby', 'php', 'java', 'javac', 'rustc', 'gcc', 'clang', 'swift', 'mkdir', 'touch', 'cp', 'mv', 'ln', 'sed', 'npx', 'next', 'vite', 'webpack', 'turbo', 'nx', 'biome'])
+const BUILD_TOOLS = new Set(['tsc', 'eslint', 'prettier', 'jest', 'vitest', 'mocha', 'pytest', 'ruff', 'black', 'mypy', 'make', 'cmake', 'java', 'javac', 'rustc', 'gcc', 'clang', 'swift', 'mkdir', 'touch', 'cp', 'mv', 'ln', 'next', 'vite', 'webpack', 'turbo', 'nx', 'biome'])
 const NETWORK = new Set(['curl', 'wget', 'ssh', 'scp', 'rsync', 'ftp', 'sftp', 'nc', 'netcat', 'telnet', 'brew', 'apt', 'apt-get', 'yum', 'dnf', 'pacman', 'docker', 'podman', 'kubectl', 'helm', 'terraform', 'gh', 'aws', 'gcloud', 'az', 'vercel', 'railway', 'fly', 'heroku', 'open', 'xdg-open'])
 const DESTRUCTIVE = new Set(['sudo', 'su', 'doas', 'dd', 'mkfs', 'fdisk', 'diskutil', 'shutdown', 'reboot', 'halt', 'killall', 'pkill', 'launchctl', 'systemctl', 'crontab', 'chown', 'eval'])
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh'])
@@ -57,11 +66,56 @@ function splitCommands(tokens: Token[]): { words: string[]; redirects: string[];
   return out.filter(c => c.words.length > 0 || c.redirects.length > 0)
 }
 
-function outside(path: string, cwd: string): boolean {
+/** Real path of `p`, resolving symlinks through its nearest existing ancestor. */
+function realish(p: string): string {
+  let cur = p
+  const rest: string[] = []
+  while (!existsSync(cur)) {
+    const up = dirname(cur)
+    if (up === cur) return p
+    rest.unshift(cur.slice(up.length + 1))
+    cur = up
+  }
+  try { return resolve(realpathSync(cur), ...rest) } catch { return p }
+}
+
+export function outside(path: string, cwd: string): boolean {
   if (path === '/dev/null' || path.startsWith('/dev/std') || path.startsWith('&')) return false
+  // Unexpanded variables, command substitution or another user's home: can't know where it lands
+  if (/[$`]/.test(path) || /^~[^/]/.test(path)) return true
   const abs = isAbsolute(path) ? path : resolve(cwd, path.replace(/^~(?=$|\/)/, process.env.HOME ?? '~'))
-  const rel = relative(cwd, abs)
-  return rel.startsWith('..') || isAbsolute(rel)
+  const lexical = relative(cwd, abs)
+  if (lexical.startsWith('..') || isAbsolute(lexical)) return true
+  // A symlink inside the project can point anywhere
+  const real = relative(realish(cwd), realish(abs))
+  return real.startsWith('..') || isAbsolute(real)
+}
+
+/** Strip leading options of a wrapper command (and the duration for timeout) to find the wrapped command. */
+function unwrap(cmd: string, args: string[]): string[] {
+  let j = 0
+  const takesValue = new Set(['-n', '-u', '-s', '-k', '-I', '-L', '-P', '-d', '-E', '-i', '-o', '-e', '--signal', '--kill-after', '--adjustment', '-C', '-S'])
+  while (j < args.length) {
+    const a = args[j]!
+    if (cmd === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { j++; continue }
+    if (a === '--') { j++; break }
+    if (a.startsWith('-')) { j += takesValue.has(a) ? 2 : 1; continue }
+    break
+  }
+  if (cmd === 'timeout' && j < args.length) j++ // the duration
+  return args.slice(j)
+}
+
+/** A sed script that writes files (w/W) or runs commands (e). */
+function sedWrites(args: string[]): boolean {
+  const scripts: string[] = []
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k]!
+    if (a === '-e' || a === '--expression') { if (args[k + 1]) scripts.push(args[k + 1]!); k++ }
+    else if (a === '-f' || a === '--file') return true
+    else if (!a.startsWith('-') && scripts.length === 0) scripts.push(a)
+  }
+  return scripts.some(sc => /(^|[;\n{}])\s*[0-9,$]*\s*(\/[^/]*\/)?\s*[wWe](\s|$)/.test(sc) || /s(.)(?:(?!\1).)*\1(?:(?!\1).)*\1[gpiImM0-9]*[we]/.test(sc))
 }
 
 function classifySimple(words: string[], redirects: string[], pipedFrom: boolean, cwd: string): Risk {
@@ -80,7 +134,28 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
   }
   if (!cmd) return risk
 
+  if (WRAPPERS.has(cmd)) {
+    const inner = unwrap(cmd, args)
+    if (!inner.length) return risk
+    // xargs feeds its input to the command as arguments, so its targets are unknown
+    const wrapped = classifySimple(inner, [], pipedFrom, cwd)
+    return max(risk, cmd === 'xargs' ? max(wrapped, { level: 1, reason: `runs ${inner[0]} on piped input` }) : wrapped)
+  }
   if (DESTRUCTIVE.has(cmd)) return { level: 3, reason: `${cmd} can change your system` }
+  if (RUNNERS.has(cmd)) {
+    // npx/bunx/pnpx run the project's own copy when it's installed; only a download is risky
+    const bin = args.find(a => !a.startsWith('-'))
+    const local = bin && (cmd === 'npx' || cmd === 'bunx' || cmd === 'pnpx') && !args.some(a => a === '--yes' || a === '-y' || a.startsWith('--package') || a === '-p')
+      && existsSync(resolve(cwd, 'node_modules', '.bin', bin))
+    return max(risk, local ? { level: 1, reason: `runs ${bin} from this project` } : { level: 2, reason: `${cmd} downloads and runs a package` })
+  }
+  if (INTERPRETERS.has(cmd)) {
+    if (args.some(a => INLINE_FLAGS.has(a)) || (cmd === 'deno' && sub === 'eval') || (cmd === 'bun' && (sub === 'x' || sub === 'add' || sub === 'install'))) {
+      return max(risk, { level: 2, reason: `${cmd} runs inline code or downloads packages` })
+    }
+    if (!args.length || args[0] === '-') return max(risk, { level: 2, reason: `${cmd} reads code from input` })
+    return max(risk, { level: 1, reason: `runs ${cmd} ${sub}`.trim() })
+  }
   if (SHELLS.has(cmd) && pipedFrom) return { level: 3, reason: 'pipes downloaded or generated content into a shell' }
   if (SHELLS.has(cmd) && args.includes('-c')) return max(risk, { level: 2, reason: 'runs a nested shell command' })
 
@@ -94,6 +169,16 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
   }
 
   if (cmd === 'git') {
+    // Options before the subcommand can set config that runs programs (core.pager, core.sshCommand…)
+    if (args.some(a => a === '-c' || a.startsWith('--config-env') || a.startsWith('--exec-path'))) return max(risk, { level: 2, reason: 'git with config overrides can run programs' })
+    if (sub === 'config') {
+      const readOnly = args.some(a => a === '--get' || a === '--get-all' || a === '--get-regexp' || a === '--list' || a === '-l' || a === '--show-origin' && args.includes('--list'))
+      return readOnly ? risk : max(risk, { level: 2, reason: 'changes git configuration, which can make git run programs' })
+    }
+    if (args.some(a => a.startsWith('-O') || a.startsWith('--open-files-in-pager') || a.startsWith('--ext-diff'))) return max(risk, { level: 2, reason: 'git option that runs another program' })
+    const out = args.find(a => a.startsWith('--output='))
+    if (out) risk = max(risk, outside(out.slice(9), cwd) ? { level: 2, reason: 'writes outside the project' } : { level: 1, reason: 'writes a file' })
+    if (sub === 'stash' && (args.includes('list') || args.includes('show'))) return risk
     if (GIT_NETWORK.has(sub)) {
       if (sub === 'push' && args.some(a => a === '--force' || a === '-f' || a.startsWith('--force-with-lease') || a.startsWith('+'))) return { level: 3, reason: 'force-pushes and can overwrite remote history' }
       return max(risk, { level: 2, reason: `git ${sub} talks to a remote` })
@@ -119,7 +204,27 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
   }
   if (cmd === 'chmod') return max(risk, args.some(a => a === '-R') ? { level: 2, reason: 'changes permissions recursively' } : { level: 1, reason: 'changes file permissions' })
   if (cmd === 'kill') return max(risk, { level: 2, reason: 'stops a process' })
-  if (cmd === 'sed' && !args.some(a => a === '-i' || a.startsWith('-i'))) return risk
+  if (cmd === 'sed') {
+    if (sedWrites(args)) return max(risk, { level: 2, reason: 'sed script writes files or runs commands' })
+    if (!args.some(a => a === '-i' || a.startsWith('-i') || a === '--in-place')) return risk
+    return max(risk, { level: 1, reason: 'edits files in place' })
+  }
+  if (cmd === 'awk' || cmd === 'gawk' || cmd === 'mawk' || cmd === 'nawk') {
+    const prog = args.filter(a => !a.startsWith('-')).join(' ')
+    if (args.includes('-f') || /system\s*\(|\|\s*getline|getline|>|\|/.test(prog)) return max(risk, { level: 2, reason: 'awk program runs commands or writes files' })
+    return risk
+  }
+  if (cmd === 'sort') {
+    const o = args.findIndex(a => a === '-o' || a.startsWith('--output'))
+    if (o === -1) return risk
+    const target = args[o]!.startsWith('--output=') ? args[o]!.slice(9) : args[o + 1] ?? ''
+    return max(risk, outside(target, cwd) ? { level: 2, reason: 'writes outside the project' } : { level: 1, reason: 'writes a file' })
+  }
+  if ((cmd === 'rg' || cmd === 'ag') && args.some(a => a.startsWith('--pre'))) return max(risk, { level: 2, reason: 'rg --pre runs a program on every file' })
+  if (cmd === 'fd' || cmd === 'fdfind') {
+    if (args.some(a => a === '-x' || a === '-X' || a.startsWith('--exec'))) return max(risk, { level: 2, reason: 'fd can run commands' })
+    return risk
+  }
   if (READ_ONLY.has(cmd)) return risk
   if (NETWORK.has(cmd)) return max(risk, { level: 2, reason: `${cmd} reaches outside your machine or project` })
   if (BUILD_TOOLS.has(cmd)) {
@@ -151,12 +256,20 @@ export function toolRisk(name: string, input: Record<string, unknown>, cwd: stri
   switch (name) {
     case 'Read':
     case 'Glob':
-    case 'Grep':
-      return { level: 0, reason: 'read-only' }
+    case 'Grep': {
+      const p = String(input.file_path ?? input.path ?? '')
+      return p && outside(p, cwd)
+        ? { level: 2, reason: `reads outside the project (${p})` }
+        : { level: 0, reason: 'read-only' }
+    }
     case 'Skill':
     case 'Plan':
-    case 'Remember':
       return { level: 0, reason: 'read-only' }
+    case 'Remember':
+      // Notes about the user follow you into every project, so they're confirmed
+      return input.scope === 'user'
+        ? { level: 2, reason: 'saves a note used in all your projects' }
+        : { level: 1, reason: 'saves a note for this project' }
     case 'WebFetch':
     case 'WebSearch':
     case 'StealthFetch':
@@ -173,6 +286,15 @@ export function toolRisk(name: string, input: Record<string, unknown>, cwd: stri
     default:
       return { level: 2, reason: 'unknown tool' }
   }
+}
+
+/** True when the command is one simple command: no pipes, chains, substitutions or redirects. */
+export function isSimpleCommand(command: string): boolean {
+  if (/\$\(|`|[\n\r]/.test(command)) return false
+  try {
+    const tokens = parse(command, (name: string) => `$${name}`) as Token[]
+    return tokens.every(t => typeof t === 'string')
+  } catch { return false }
 }
 
 /** Key used for "always allow" rules: the command and its subcommand, e.g. "npm install". */
