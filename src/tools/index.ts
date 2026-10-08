@@ -11,6 +11,7 @@ import { StealthFetchTool } from './StealthFetchTool.js'
 import { SkillTool } from './SkillTool.js'
 import { PlanTool } from './PlanTool.js'
 import { RememberTool } from './RememberTool.js'
+import { ImageTool } from './ImageTool.js'
 import { scrapifyConfig } from '../web/scrapify.js'
 
 export function registerAllTools() {
@@ -25,6 +26,7 @@ export function registerAllTools() {
   register(SkillTool)
   register(PlanTool)
   register(RememberTool)
+  register(ImageTool)
   // Only offered when stealth fetching is configured
   if (scrapifyConfig()) register(StealthFetchTool)
 }

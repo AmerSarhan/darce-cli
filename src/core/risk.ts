@@ -275,11 +275,13 @@ export function toolRisk(name: string, input: Record<string, unknown>, cwd: stri
     case 'StealthFetch':
       return { level: 1, reason: 'reads from the web (untrusted content)' }
     case 'Edit':
-    case 'Write': {
+    case 'Write':
+    case 'Image': {
       const p = String(input.file_path ?? '')
-      return outside(p, cwd)
-        ? { level: 3, reason: `writes outside the project (${p})` }
-        : { level: 1, reason: name === 'Write' ? 'creates or overwrites a file' : 'edits a file' }
+      const refsOutside = name === 'Image' && Array.isArray(input.reference_images) && input.reference_images.some(r => outside(String(r), cwd))
+      if (outside(p, cwd)) return { level: 3, reason: `writes outside the project (${p})` }
+      if (refsOutside) return { level: 2, reason: 'sends an image from outside the project' }
+      return { level: 1, reason: name === 'Write' ? 'creates or overwrites a file' : name === 'Image' ? 'generates an image (counts as 3 requests)' : 'edits a file' }
     }
     case 'Bash':
       return bashRisk(String(input.command ?? ''), cwd)
