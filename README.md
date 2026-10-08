@@ -47,17 +47,18 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 
 ## Why Darce?
 
-| | Darce | Claude Code | Cursor | GitHub Copilot CLI |
-|---|:---:|:---:|:---:|:---:|
-| **Works in any terminal** | Yes | Yes | No (IDE only) | Partial |
-| **Any model** (300+ via OpenRouter: Claude, GPT, Gemini, Grok, DeepSeek, Kimi, GLM, Qwen) | Yes | Claude only | Limited | GPT only |
-| **Reads + edits files** | Yes | Yes | Yes | No |
-| **Runs shell commands** | Yes | Yes | No | Yes |
-| **Smart model switching** | Yes | No | No | No |
-| **Free tier** | Yes | No | No | No |
-| **Open source** | Yes | Partial | No | No |
-| **Install time** | 3 seconds | Minutes | Minutes | Minutes |
-| **Package size** | 19 kB | ~200 MB | ~500 MB | ~100 MB |
+- **Any model** — 300+ tool-capable models via OpenRouter: Claude, GPT, Gemini, Grok, DeepSeek, Kimi, GLM, Qwen. Switch mid-conversation.
+- **Always current** — the model list is fetched live, so new models show up the day they launch.
+- **Tiny** — 19 kB package, installs in seconds, starts instantly.
+- **Free tier** — start without a credit card or an API key.
+- **Open source** — MIT licensed.
+
+## What's New in 0.4.0
+
+- Live model catalog from OpenRouter with a searchable picker (context, price, vision/reasoning)
+- `/model <search>` switches by name — `/model kimi`, `/model sonnet-5.5`
+- Upgraded to React 19 + Ink 8; requires Node.js 22+
+- Fixes for blank responses and input leaking into the prompt while the picker is open
 
 ## Get Started
 
@@ -67,9 +68,9 @@ darce login
 darce
 ```
 
-Requires Node.js 22 or newer.
-
 That's it. No config files. No API keys to copy. No Docker.
+
+Requires Node.js 22 or newer. Already installed? Update with `npm install -g darce-cli@latest`.
 
 ## What Can It Do?
 
@@ -86,10 +87,10 @@ That's it. No config files. No API keys to copy. No Docker.
 ## Features
 
 ```
-/help     List commands          Ctrl+M   Switch models
-/model    Pick / search models   Ctrl+C   Cancel / Exit
-/clear    Reset conversation     Up/Down  Input history
-/cost     Session costs          """      Multi-line mode
+/help     List commands          Ctrl+C   Cancel / Exit
+/model    Pick / search models   Up/Down  Input history
+/clear    Reset conversation     """      Multi-line mode
+/cost     Session costs
 /compact  Shrink context
 ```
 
@@ -106,7 +107,7 @@ That's it. No config files. No API keys to copy. No Docker.
 
 Every tool-capable model on [OpenRouter](https://openrouter.ai/models) — 300+ and counting. The list is fetched live (cached for 24h), so new models show up the day they launch.
 
-Open the picker with `/model` (or `Ctrl+M`) and type to search, or jump straight to one:
+Open the picker with `/model` and type to search, or jump straight to one:
 
 ```
 /model sonnet-5.5        # switch by name
@@ -175,7 +176,7 @@ git clone https://github.com/AmerSarhan/darce-cli.git
 cd darce-cli
 npm install
 npm run dev           # Run from source
-npx tsx test.ts       # 117 tests
+npm test              # 117 tests
 npm run build         # Build for production
 ```
 
