@@ -50,14 +50,14 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 | | Darce | Claude Code | Cursor | GitHub Copilot CLI |
 |---|:---:|:---:|:---:|:---:|
 | **Works in any terminal** | Yes | Yes | No (IDE only) | Partial |
-| **Any model** (Claude, Grok, Gemini, DeepSeek, Llama) | Yes | Claude only | Limited | GPT only |
+| **Any model** (300+ via OpenRouter: Claude, GPT, Gemini, Grok, DeepSeek, Kimi, GLM, Qwen) | Yes | Claude only | Limited | GPT only |
 | **Reads + edits files** | Yes | Yes | Yes | No |
 | **Runs shell commands** | Yes | Yes | No | Yes |
 | **Smart model switching** | Yes | No | No | No |
 | **Free tier** | Yes | No | No | No |
 | **Open source** | Yes | Partial | No | No |
 | **Install time** | 3 seconds | Minutes | Minutes | Minutes |
-| **Package size** | 14 kB | ~200 MB | ~500 MB | ~100 MB |
+| **Package size** | 19 kB | ~200 MB | ~500 MB | ~100 MB |
 
 ## Get Started
 
@@ -66,6 +66,8 @@ npm install -g darce-cli
 darce login
 darce
 ```
+
+Requires Node.js 22 or newer.
 
 That's it. No config files. No API keys to copy. No Docker.
 
@@ -85,7 +87,7 @@ That's it. No config files. No API keys to copy. No Docker.
 
 ```
 /help     List commands          Ctrl+M   Switch models
-/model    Change model           Ctrl+C   Cancel / Exit
+/model    Pick / search models   Ctrl+C   Cancel / Exit
 /clear    Reset conversation     Up/Down  Input history
 /cost     Session costs          """      Multi-line mode
 /compact  Shrink context
@@ -102,17 +104,18 @@ That's it. No config files. No API keys to copy. No Docker.
 
 ## Models
 
-Switch mid-conversation with `Ctrl+M` or `/model`.
+Every tool-capable model on [OpenRouter](https://openrouter.ai/models) — 300+ and counting. The list is fetched live (cached for 24h), so new models show up the day they launch.
 
-| Model | Best for | Speed |
-|-------|----------|-------|
-| `qwen/qwen3-coder` | General coding (default) | Fast |
-| `x-ai/grok-4.1-fast` | Complex reasoning | Fast |
-| `anthropic/claude-sonnet-4` | Precise coding | Medium |
-| `google/gemini-2.5-pro` | Huge codebases (1M ctx) | Medium |
-| `deepseek/deepseek-r1` | Deep reasoning | Slower |
-| `deepseek/deepseek-chat` | Quick questions | Very fast |
-| `meta-llama/llama-4-maverick` | Open source (1M ctx) | Fast |
+Open the picker with `/model` (or `Ctrl+M`) and type to search, or jump straight to one:
+
+```
+/model sonnet-5.5        # switch by name
+/model kimi              # search — switches if there's one match
+/model someone/new-model # any OpenRouter model ID
+darce --model openai/gpt-5.6-sol
+```
+
+The picker shows context window, price per million tokens, and vision/reasoning support for each model. Default: `qwen/qwen3-coder`.
 
 ## Pricing
 
@@ -139,7 +142,8 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
 | Command | Description |
 |---------|-------------|
 | `/help` | List all commands |
-| `/model <id>` | Switch model (`/m` alias) |
+| `/model` | Open the model picker (`/m` alias) |
+| `/model <search>` | Switch model by name or ID |
 | `/clear` | Clear conversation (`/c` alias) |
 | `/cost` | Show session cost breakdown |
 | `/compact` | Compact conversation history |
@@ -157,8 +161,8 @@ Or sign up at [cli.darce.dev](https://cli.darce.dev)
   "router": {
     "default": "qwen/qwen3-coder",
     "rules": [
-      { "when": "large-context", "use": "google/gemini-2.5-pro" },
-      { "when": "complex-reasoning", "use": "x-ai/grok-4.1-fast" }
+      { "when": "large-context", "use": "google/gemini-3.1-pro-preview" },
+      { "when": "complex-reasoning", "use": "anthropic/claude-sonnet-5.5" }
     ]
   }
 }
@@ -171,7 +175,7 @@ git clone https://github.com/AmerSarhan/darce-cli.git
 cd darce-cli
 npm install
 npm run dev           # Run from source
-npx tsx test.ts       # 106 tests
+npx tsx test.ts       # 117 tests
 npm run build         # Build for production
 ```
 
@@ -185,5 +189,5 @@ If Darce saved you time, drop a star. It helps others find it.
 
 <p align="center">
   Built by <a href="https://darce.dev">darce.dev</a><br>
-  <sub>MIT License</sub>
+  <sub><a href="LICENSE">MIT License</a></sub>
 </p>

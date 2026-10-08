@@ -1,8 +1,10 @@
 // Fast paths — no heavy imports
+import { VERSION } from '../version.js'
+
 const args = process.argv.slice(2)
 
 if (args.includes('--version') || args.includes('-v')) {
-  console.log('0.2.2')
+  console.log(VERSION)
   process.exit(0)
 }
 
@@ -15,7 +17,7 @@ if (args.includes('--help') || args.includes('-h')) {
     darce "fix the login bug"       Start with a prompt
     darce --model <id>              Override model
     darce login                     Sign in / create account
-    darce upgrade                   Upgrade to Pro ($20/mo)
+    darce upgrade                   Upgrade to Builder or Power
     darce logout                    Remove saved credentials
     darce --resume, -r              Resume last session
     darce --version                 Print version
@@ -202,6 +204,10 @@ async function main(modelOverride?: string, initialPrompt?: string, resumeSessio
     console.log('\n  No API key found. Run `darce login` to get started.\n')
     process.exit(1)
   }
+
+  // Refresh the model catalog in the background — the picker uses whatever is loaded
+  const { loadModels } = await import('../config/models.js')
+  loadModels().catch(() => {})
 
   const { registerAllTools } = await import('../tools/index.js')
   registerAllTools()

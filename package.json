@@ -1,6 +1,6 @@
 {
   "name": "darce-cli",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "description": "A blazing-fast AI coding agent for your terminal",
   "type": "module",
   "bin": {
@@ -9,7 +9,9 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/entrypoints/cli.tsx",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "test": "tsx test.ts",
+    "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
     "ai",
@@ -32,7 +34,10 @@
     "copilot-alternative",
     "cursor-alternative",
     "nodejs",
-    "typescript"
+    "typescript",
+    "gpt",
+    "kimi",
+    "glm"
   ],
   "author": "Amer Sarhan",
   "license": "MIT",
@@ -42,24 +47,28 @@
   },
   "homepage": "https://darce.dev",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "dependencies": {
-    "chalk": "^5.6.2",
+    "chalk": "^6.0.1",
     "cli-highlight": "^2.1.11",
-    "globby": "^16.2.0",
-    "ink": "^5.2.1",
+    "globby": "^16.2.4",
+    "ink": "^8.0.0",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
-    "react": "^18.3.1",
-    "zod": "^4.3.6",
-    "zod-to-json-schema": "^3.25.2"
+    "react": "^19.3.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
-    "@types/react": "^19.2.14",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
     "tsup": "^8.5.1",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

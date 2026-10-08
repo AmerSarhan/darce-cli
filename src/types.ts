@@ -93,6 +93,8 @@ export type DarceConfig = {
 
 export type ModelProfile = {
   id: string
+  name?: string
+  created?: number
   strengths: string[]
   contextWindow: number
   costPer1kInput: number

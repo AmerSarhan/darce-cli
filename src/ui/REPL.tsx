@@ -13,6 +13,7 @@ import { saveSession } from '../state/sessions.js'
 import type { CommandContext } from '../core/commands.js'
 import type { SpinnerMode } from '../types.js'
 import type { Provider } from '../providers/provider.js'
+import { VERSION } from '../version.js'
 
 // Each item in the display log
 type DisplayItem =
@@ -87,6 +88,11 @@ export function REPL({ provider, initialPrompt }: Props) {
       }
 
       const result = executeCommand(userInput, cmdContext)
+
+      if (result === '__MODEL_PICKER__') {
+        setShowModelPicker(true)
+        return
+      }
 
       if (result === '__QUIT__') {
         exit()
@@ -164,8 +170,10 @@ export function REPL({ provider, initialPrompt }: Props) {
 
           case 'message_complete':
             // Flush any remaining streaming text as a display item
-            if (currentAssistantText.trim()) {
-              setDisplayLog(prev => [...prev, { type: 'assistant-text', text: currentAssistantText }])
+            // Capture before resetting — React 19 runs updaters lazily, after the reset below
+            const completedText = currentAssistantText
+            if (completedText.trim()) {
+              setDisplayLog(prev => [...prev, { type: 'assistant-text', text: completedText }])
             }
             setStreamingText(null)
             currentAssistantText = ''
@@ -240,7 +248,7 @@ export function REPL({ provider, initialPrompt }: Props) {
       <Box marginBottom={1}>
         <Text bold color="cyan">{'> '}</Text>
         <Text bold>Darce</Text>
-        <Text dimColor> v0.2.2 </Text>
+        <Text dimColor> v{VERSION} </Text>
         <Text dimColor>({state.currentModel.split('/').pop() || state.currentModel})</Text>
       </Box>
 
@@ -271,7 +279,7 @@ export function REPL({ provider, initialPrompt }: Props) {
       )}
 
       {/* Input prompt */}
-      <Prompt onSubmit={handleSubmit} isLoading={isLoading} history={history} />
+      <Prompt onSubmit={handleSubmit} isLoading={isLoading} history={history} disabled={showModelPicker} />
 
       {/* Status bar */}
       <StatusBar model={state.currentModel} cwd={state.cwd} messages={messagesRef.current} />

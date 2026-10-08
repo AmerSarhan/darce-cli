@@ -27,6 +27,8 @@ import { parseSSEFrames } from './src/core/streaming.js'
 import { estimateTokens, estimateMessagesTokens } from './src/utils/tokens.js'
 import { addUsage, getTotalCost, getTotalTokens, resetCosts, formatCostSummary, formatTokenCount } from './src/state/costTracker.js'
 import { selectModel } from './src/providers/router.js'
+import { toModelProfiles, getModels, getModelProfile } from './src/config/models.js'
+import { executeCommand } from './src/core/commands.js'
 import { buildSystemPrompt, resetContext } from './src/core/context.js'
 import type { ToolContext, Message, RouterConfig } from './src/types.js'
 
@@ -690,8 +692,8 @@ async function testModelRouter() {
     default: 'qwen/qwen3-coder',
     rules: [
       { when: 'quick-question', use: 'deepseek/deepseek-chat' },
-      { when: 'large-context', use: 'google/gemini-2.5-pro' },
-      { when: 'complex-reasoning', use: 'anthropic/claude-sonnet-4' },
+      { when: 'large-context', use: 'google/gemini-3.1-pro-preview' },
+      { when: 'complex-reasoning', use: 'anthropic/claude-sonnet-5.5' },
     ],
   }
 
@@ -710,7 +712,7 @@ async function testModelRouter() {
   await test('Router: large-context matches huge messages', () => {
     const bigContent = 'x'.repeat(500000) // way over 100k tokens
     const msgs: Message[] = [{ role: 'user', content: bigContent }]
-    return selectModel(msgs, config) === 'google/gemini-2.5-pro'
+    return selectModel(msgs, config) === 'google/gemini-3.1-pro-preview'
   })
 
   await test('Router: returns default with empty rules', () => {
@@ -840,6 +842,7 @@ async function runTests() {
   await testModelRouter()
   await testContextBuilder()
   await testEdgeCases()
+  await testModelCatalog()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -860,6 +863,61 @@ async function runTests() {
   } catch { /* ignore */ }
 
   if (failed > 0) process.exit(1)
+}
+
+// ============================================================
+// Model catalog
+// ============================================================
+
+async function testModelCatalog() {
+  const raw = [
+    { id: 'a/old', created: 100, context_length: 1000, pricing: { prompt: '0.000001', completion: '0.000002' }, supported_parameters: ['tools'] },
+    { id: 'b/new', created: 200, context_length: 2000, pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools', 'reasoning'], architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] } },
+    { id: 'c/no-tools', created: 300, supported_parameters: ['temperature'] },
+    { id: 'd/image-gen', created: 400, supported_parameters: ['tools'], architecture: { output_modalities: ['image'] } },
+    { id: 'b/new:batch', created: 200, supported_parameters: ['tools'] },
+    { id: 'e/router', created: 50, pricing: { prompt: '-1', completion: '-1' }, supported_parameters: ['tools'] },
+  ]
+  const profiles = toModelProfiles(raw)
+
+  await test('Catalog: keeps only tool-capable text models', () =>
+    profiles.map(p => p.id).join(',') === 'b/new,a/old,e/router')
+  await test('Catalog: sorted newest first', () => profiles[0]!.id === 'b/new')
+  await test('Catalog: converts per-token pricing to per-1k', () => {
+    const p = profiles.find(p => p.id === 'a/old')!
+    return Math.abs(p.costPer1kInput - 0.001) < 1e-9 && Math.abs(p.costPer1kOutput - 0.002) < 1e-9
+  })
+  await test('Catalog: clamps negative (variable) pricing to 0', () =>
+    profiles.find(p => p.id === 'e/router')!.costPer1kInput === 0)
+  await test('Catalog: derives vision + reasoning strengths', () => {
+    const s = profiles[0]!.strengths
+    return s.includes('vision') && s.includes('reasoning')
+  })
+  await test('Catalog: fallback list is available before fetch', () => getModels().length > 0)
+  await test('Catalog: getModelProfile finds default model', () => getModelProfile('qwen/qwen3-coder') !== undefined)
+
+  let switched = ''
+  const ctx = { setModel: (m: string) => { switched = m }, currentModel: 'qwen/qwen3-coder', clearMessages: () => {}, cwd: process.cwd() }
+  await test('/model: exact short name switches', () => {
+    switched = ''
+    executeCommand('/model qwen3-coder-next', ctx)
+    return switched === 'qwen/qwen3-coder-next'
+  })
+  await test('/model: unique search switches', () => {
+    switched = ''
+    executeCommand('/model kimi', ctx)
+    return switched === 'moonshotai/kimi-k3'
+  })
+  await test('/model: ambiguous search lists matches', () => {
+    switched = ''
+    const out = executeCommand('/model deepseek', ctx) ?? ''
+    return switched === '' && out.includes('Multiple matches')
+  })
+  await test('/model: unknown provider/id is passed through', () => {
+    switched = ''
+    executeCommand('/model someone/brand-new-model', ctx)
+    return switched === 'someone/brand-new-model'
+  })
 }
 
 runTests().catch(err => {

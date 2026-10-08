@@ -1,5 +1,5 @@
 import { getTotalCost, formatCostSummary, formatTokenCount } from '../state/costTracker.js'
-import { MODEL_PROFILES } from '../config/models.js'
+import { getModels } from '../config/models.js'
 
 export type CommandContext = {
   setModel: (model: string) => void
@@ -30,22 +30,30 @@ const COMMANDS: SlashCommand[] = [
   {
     name: 'model',
     aliases: ['m'],
-    description: 'Switch model or show current model',
+    description: 'Open the model picker, or /model <search> to switch',
     execute: (args, context) => {
-      if (!args.trim()) {
-        const available = MODEL_PROFILES.map(m => {
-          const marker = m.id === context.currentModel ? ' (active)' : ''
-          return `  ${m.id}${marker}`
-        }).join('\n')
-        return `Current model: ${context.currentModel}\n\nAvailable models:\n${available}`
+      const models = getModels()
+      const query = args.trim().toLowerCase()
+      if (!query) return '__MODEL_PICKER__'
+      const exact = models.find(m => m.id.toLowerCase() === query || m.id.toLowerCase().endsWith('/' + query))
+      if (exact) {
+        context.setModel(exact.id)
+        return `Switched to ${exact.id}`
       }
-      const modelId = args.trim()
-      const profile = MODEL_PROFILES.find(m => m.id === modelId || m.id.endsWith('/' + modelId))
-      if (!profile) {
-        return `Unknown model: ${modelId}. Type /model to see available models.`
+      const matches = models.filter(m => m.id.toLowerCase().includes(query) || m.name?.toLowerCase().includes(query))
+      if (matches.length === 1) {
+        context.setModel(matches[0]!.id)
+        return `Switched to ${matches[0]!.id}`
       }
-      context.setModel(profile.id)
-      return `Switched to ${profile.id}`
+      if (matches.length > 1) {
+        return `Multiple matches for "${query}":\n` + matches.slice(0, 15).map(m => `  ${m.id}`).join('\n')
+      }
+      // Not in the catalog (offline, or brand new) — let OpenRouter decide
+      if (query.includes('/')) {
+        context.setModel(args.trim())
+        return `Switched to ${args.trim()} (not in catalog)`
+      }
+      return `Unknown model: ${args.trim()}. Type /model to see available models.`
     },
   },
   {

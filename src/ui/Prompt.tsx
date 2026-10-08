@@ -7,9 +7,10 @@ type Props = {
   onSubmit: (text: string) => void
   isLoading: boolean
   history: string[]
+  disabled?: boolean
 }
 
-export function Prompt({ onSubmit, isLoading, history }: Props) {
+export function Prompt({ onSubmit, isLoading, history, disabled = false }: Props) {
   const [input, setInput] = useState('')
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [cursor, setCursor] = useState(0)
@@ -116,7 +117,7 @@ export function Prompt({ onSubmit, isLoading, history }: Props) {
       setInput(prev => prev.slice(0, cursor) + ch + prev.slice(cursor))
       setCursor(c => c + 1)
     }
-  })
+  }, { isActive: !disabled })
 
   if (isLoading) return null
 
