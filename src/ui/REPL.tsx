@@ -243,7 +243,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         const plan = info.tier === 'free' ? 'Starter' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
         const left = typeof info.daily_limit === 'number' ? ` · ${Math.max(0, info.daily_limit - info.daily_requests).toLocaleString()} of ${info.daily_limit.toLocaleString()} requests left` : ' · unlimited'
         // DARCE_DEMO=1 keeps your email out of screen recordings
-        if (!process.env.DARCE_DEMO) accountLine.current = `${info.email} · ${plan}${left}`
+        if (info.tier === 'trial') accountLine.current = `trial${left} · \`darce signup\` keeps going for free`
+        else if (!process.env.DARCE_DEMO) accountLine.current = `${info.email} · ${plan}${left}`
         setSuggestOn(prev => (prev === null ? info.tier !== 'free' : prev))
       }
       clearTimeout(timer)

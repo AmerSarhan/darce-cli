@@ -22,7 +22,7 @@ npm install -g darce-cli
 darce
 ```
 
-The first run creates a free account right in your terminal (email and password, no card, no API key) and starts a session. Needs Node.js 22+.
+The first run lets you try it straight away with 10 free requests, no account needed. When you want more, `darce signup` creates a free account (25 requests a month, no card) and keeps your history. Needs Node.js 22+.
 
 ## What makes it different
 

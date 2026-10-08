@@ -16,6 +16,7 @@ if (args.includes('--help') || args.includes('-h')) {
     darce                           Interactive REPL
     darce "fix the login bug"       Start with a prompt
     darce --model <id>              Override model
+    darce signup                    Create a free account (keeps your trial and its history)
     darce login                     Sign in with your browser (or create an account)
     darce upgrade                   Upgrade to Builder or Power
     darce logout                    Remove saved credentials
@@ -48,6 +49,13 @@ if (args[0] === 'login') {
   })
 } else if (args[0] === 'logout') {
   logoutFlow().catch(err => { console.error(err.message); process.exit(1) })
+} else if (args[0] === 'signup') {
+  ;(async () => {
+    const { loadConfig } = await import('../config/config.js')
+    const { signupFlow } = await import('../auth/onboarding.js')
+    const key = await signupFlow(loadConfig().apiKey || undefined)
+    process.exit(key ? 0 : 1)
+  })().catch(err => { console.error(err.message); process.exit(1) })
 } else if (args[0] === 'upgrade') {
   upgradeFlow().then(() => process.exit(0)).catch(err => { console.error(err.message); process.exit(1) })
 } else {

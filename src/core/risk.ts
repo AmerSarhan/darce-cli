@@ -24,6 +24,11 @@ const WRAPPERS = new Set(['env', 'xargs', 'timeout', 'nice', 'nohup', 'command',
 // Interpreters: running a project file is "changes the project", but inline code is opaque
 const INTERPRETERS = new Set(['node', 'nodejs', 'tsx', 'ts-node', 'python', 'python3', 'ruby', 'php', 'perl', 'deno', 'bun', 'lua', 'Rscript', 'osascript'])
 const INLINE_FLAGS = new Set(['-e', '-c', '-p', '-r', '-E', '--eval', '--print', '-pe', '-ne', '-le'])
+// Effects that leave this machine can't be rolled back by /undo, so they always ask first
+const OUTSIDE_EFFECT = /deploy|release|publish|migrat|seed|(^|[:._/-])db([:._/-]|$)|prod|push|drop|truncate|reset|rollback|upload|ship|terraform|infra/i
+const DB_CLIENTS = new Set(['psql', 'pg_dump', 'pg_restore', 'mysql', 'mariadb', 'mongosh', 'mongo', 'redis-cli', 'cqlsh', 'clickhouse-client', 'prisma', 'drizzle-kit', 'knex', 'sequelize', 'supabase', 'pscale', 'neonctl', 'turso', 'atlas', 'flyway', 'liquibase', 'dbmate', 'goose'])
+const DESTRUCTIVE_SQL = /\b(drop|truncate)\b|\bdelete\s+from\b|\balter\s+table\b.*\bdrop\b/i
+const NO_UNDO = " (/undo can't reverse that)"
 // Download-and-run package runners
 const RUNNERS = new Set(['npx', 'bunx', 'pnpx', 'uvx', 'pipx'])
 
@@ -153,6 +158,9 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
     const bin = args.find(a => !a.startsWith('-'))
     const local = bin && (cmd === 'npx' || cmd === 'bunx' || cmd === 'pnpx') && !args.some(a => a === '--yes' || a === '-y' || a.startsWith('--package') || a === '-p')
       && existsSync(resolve(cwd, 'node_modules', '.bin', bin))
+    if (local && (DB_CLIENTS.has(bin!) || args.some(a => !a.startsWith('-') && OUTSIDE_EFFECT.test(a)))) {
+      return max(risk, { level: 2, reason: `${bin} may change things outside this machine${NO_UNDO}` })
+    }
     return max(risk, local ? { level: 1, reason: `runs ${bin} from this project` } : { level: 2, reason: `${cmd} downloads and runs a package` })
   }
   if (INTERPRETERS.has(cmd)) {
@@ -160,6 +168,9 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
       return max(risk, { level: 2, reason: `${cmd} runs inline code or downloads packages` })
     }
     if (!args.length || args[0] === '-') return max(risk, { level: 2, reason: `${cmd} reads code from input` })
+    // e.g. scripts/seed.js, deploy.py, `manage.py migrate`, `artisan migrate`
+    const named = args.slice(0, 3).find(a => !a.startsWith('-') && OUTSIDE_EFFECT.test(a))
+    if (named) return max(risk, { level: 2, reason: `runs ${args.slice(0, 2).join(' ')}, which may change things outside this machine${NO_UNDO}` })
     return max(risk, { level: 1, reason: `runs ${cmd} ${sub}`.trim() })
   }
   if (SHELLS.has(cmd) && pipedFrom) return { level: 3, reason: 'pipes downloaded or generated content into a shell' }
@@ -209,9 +220,19 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
     return max(risk, { level: 2, reason: `git ${gsub}` })
   }
 
+  if (DB_CLIENTS.has(cmd)) {
+    if (DESTRUCTIVE_SQL.test(args.join(' '))) return { level: 3, reason: `${cmd} runs destructive SQL against a database${NO_UNDO}` }
+    return max(risk, { level: 2, reason: `${cmd} talks to a database${NO_UNDO}` })
+  }
+  // Project scripts whose names say they reach outside: deploys, migrations, seeds, releases
+  const script = (PKG_MANAGERS.has(cmd) && (sub === 'run' || sub === 'run-script') ? args.filter(a => !a.startsWith('-'))[1]
+    : ['make', 'just', 'rake', 'task', 'mage'].includes(cmd) ? args.find(a => !a.startsWith('-') && !a.includes('='))
+    : (cmd === 'npm' || cmd === 'pnpm' || cmd === 'yarn' || cmd === 'bun') && sub && !PKG_INSTALL.has(sub) && !['test', 't', 'run', 'exec', 'x', 'start', 'build'].includes(sub) ? sub
+    : undefined)
+  if (script && OUTSIDE_EFFECT.test(script)) return max(risk, { level: 2, reason: `runs the "${script}" script, which may change things outside this machine${NO_UNDO}` })
+
   if (PKG_MANAGERS.has(cmd)) {
     if (PKG_INSTALL.has(sub)) return max(risk, { level: 2, reason: `${cmd} ${sub} downloads or publishes packages` })
-    if (cmd === 'npm' && sub === 'run' && /^(deploy|publish|release)/.test(args[1] ?? '')) return max(risk, { level: 2, reason: `runs the ${args[1]} script` })
     return max(risk, { level: 1, reason: `${cmd} ${sub || ''}`.trim() })
   }
 
@@ -243,7 +264,7 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
     return risk
   }
   if (READ_ONLY.has(cmd)) return risk
-  if (NETWORK.has(cmd)) return max(risk, { level: 2, reason: `${cmd} reaches outside your machine or project` })
+  if (NETWORK.has(cmd)) return max(risk, { level: 2, reason: `${cmd} reaches outside your machine or project${NO_UNDO}` })
   if (BUILD_TOOLS.has(cmd)) {
     const outsideTarget = (cmd === 'cp' || cmd === 'mv' || cmd === 'ln') && args.filter(a => !a.startsWith('-')).some(a => outside(a, cwd))
     return max(risk, outsideTarget ? { level: 2, reason: `${cmd} touches files outside the project` } : { level: 1, reason: `runs ${cmd}` })

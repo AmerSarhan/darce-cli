@@ -1152,6 +1152,11 @@ async function testPhase1() {
   for (const cmd of mustAsk) await test(`Risk: "${cmd}" asks first`, () => bashRisk(cmd, '/repo').level >= 2)
   await test('Risk: git -C into the project is read-only', () => bashRisk('git -C /repo status --short', '/repo').level === 0 && bashRisk('git --no-pager log -3', '/repo').level === 0)
   await test('Risk: git -C elsewhere asks', () => bashRisk('git -C /etc log', '/repo').level === 2)
+  // Effects that leave the machine can't be undone, so they must ask even in auto mode
+  for (const cmd of ['npm run migrate', 'npm run db:migrate', 'pnpm run deploy', 'make deploy', 'node scripts/seed.js', 'python3 manage.py migrate', 'php artisan migrate', 'psql -c "select 1"', 'prisma db push'])
+    await test(`Risk: "${cmd}" asks first (outside effects)`, () => bashRisk(cmd, '/repo').level >= 2)
+  await test('Risk: destructive SQL is level 3', () => bashRisk('psql $DATABASE_URL -c "drop table users"', '/repo').level === 3)
+  await test('Risk: everyday scripts still run', () => ['npm test', 'npm run build', 'npm run dev', 'make test', 'node index.js'].every(c => bashRisk(c, '/repo').level === 1))
   await test('Risk: cd into the project is read-only', () => bashRisk('cd /repo/src && ls -la', '/repo').level === 0)
   await test('Risk: cd outside the project asks', () => bashRisk('cd /etc && ls', '/repo').level === 2)
   await test('Risk: git config --get stays read-only', () => bashRisk('git config --get user.name', '/repo').level === 0)

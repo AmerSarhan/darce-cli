@@ -79,6 +79,67 @@ async function callAuth(endpoint: 'login' | 'register', email: string, password:
   }
 }
 
+/** Start a no-account trial: a key with a few requests, claimable later with `darce signup`. */
+async function startTrial(): Promise<{ apiKey: string; limit: number } | { error: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/v1/auth/trial`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    const data = await res.json().catch(() => ({})) as { api_key?: string; limit?: number; message?: string }
+    if (res.ok && data.api_key) return { apiKey: data.api_key, limit: data.limit ?? 10 }
+    return { error: data.message || `Couldn't start a trial (${res.status}).` }
+  } catch {
+    return { error: "Couldn't reach darce.dev — check your internet connection." }
+  }
+}
+
+/** `darce signup`: turn the current trial into a free account (same key, same history), or create one. */
+export async function signupFlow(currentKey?: string): Promise<string | null> {
+  if (!process.stdin.isTTY) { console.log('\n  Run `darce signup` in a terminal.\n'); return null }
+  const p = createPrompter()
+  let tier = ''
+  if (currentKey) {
+    try {
+      const res = await fetch(`${API_BASE}/v1/account`, { headers: { Authorization: `Bearer ${currentKey}` } })
+      tier = ((await res.json().catch(() => ({}))) as { tier?: string }).tier ?? ''
+    } catch {}
+  }
+  if (tier !== 'trial') {
+    if (tier) console.log('\n  You already have an account on this machine. Creating another one:\n')
+    const result = await signUp(p)
+    const apiKey = typeof result === 'object' && result ? await signIn(p, result.signinEmail) : result
+    if (apiKey) saveCredentials(apiKey, lastEmail)
+    return apiKey
+  }
+
+  console.log('\n  Create your free account (25 requests a month, no card). Your trial and its history carry over.\n')
+  const email = await askEmail(p.ask)
+  if (!email) return null
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    const password = await p.askSecret(`  Choose a password (${MIN_PASSWORD}+ characters): `)
+    if (password.length < MIN_PASSWORD) { console.log(`  Too short — use at least ${MIN_PASSWORD} characters.\n`); continue }
+    const confirm = await p.askSecret('  Confirm password: ')
+    if (confirm !== password) { console.log("  Passwords don't match. Try again.\n"); continue }
+    try {
+      const res = await fetch(`${API_BASE}/v1/auth/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${currentKey}` },
+        body: JSON.stringify({ email, password }),
+      })
+      const data = await res.json().catch(() => ({})) as { api_key?: string; message?: string }
+      if (res.ok && data.api_key) {
+        saveCredentials(data.api_key, email)
+        console.log(`  Done: ${email} is on the free Starter plan. Carry on with \`darce --resume\`.\n`)
+        return data.api_key
+      }
+      console.log(`  ${data.message || `Sign-up failed (${res.status}).`}\n`)
+      if (res.status === 409) return null
+    } catch {
+      console.log("  Couldn't reach darce.dev — check your internet connection.\n")
+      return null
+    }
+  }
+  return null
+}
+
 export function saveCredentials(apiKey: string, email = '') {
   if (email) { addAccount(email, apiKey, API_BASE); return }
   const rcPath = join(homedir(), '.darcerc')
@@ -180,17 +241,30 @@ export async function onboard(mode: 'choose' | 'signin' = 'choose'): Promise<str
   try {
     let choice = mode === 'signin' ? '3' : ''
     if (!choice) {
-      console.log('\n  Welcome to Darce — an AI coding agent for your terminal.\n')
-      console.log('    1) Sign in with your browser        (recommended)')
-      console.log('    2) Create a free account here       (25 requests/month, no card needed)')
-      console.log('    3) Sign in here with email and password\n')
-      choice = await p.ask('  Choose 1, 2 or 3 [1]: ')
+      console.log('\n  Welcome to Darce — the coding agent you can undo.\n')
+      console.log('    1) Try it now                       (10 free requests, no account)')
+      console.log('    2) Sign in with your browser')
+      console.log('    3) Create a free account here       (25 requests/month, no card needed)')
+      console.log('    4) Sign in here with email and password\n')
+      choice = await p.ask('  Choose 1-4 [1]: ')
       console.log()
+      // Menu numbers shifted when the trial was added; map back to the flows below
+      choice = choice === '' || choice === '1' ? 'trial' : String(Number(choice) - 1)
     }
 
     let apiKey: string | null = null
     let email = ''
-    if (choice === '' || choice === '1') {
+    if (choice === 'trial') {
+      const t = await startTrial()
+      if ('apiKey' in t) {
+        saveCredentials(t.apiKey)
+        console.log(`  You're in: ${t.limit} free requests on fast models. When you want more, run \`darce signup\` and keep your history.\n`)
+        return t.apiKey
+      }
+      console.log(`  ${t.error} Let's sign in with your browser instead.\n`)
+      choice = '1'
+    }
+    if (choice === '1') {
       console.log('  Opening cli.darce.dev in your browser…')
       try {
         const r = await browserLogin({ onUrl: url => console.log(`  If it didn't open, visit:\n  ${url}\n\n  Waiting for you to sign in (Ctrl+C to cancel)…`) })
