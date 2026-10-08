@@ -4,7 +4,7 @@
   "description": "A blazing-fast AI coding agent for your terminal",
   "type": "module",
   "bin": {
-    "darce": "./dist/cli.js"
+    "darce": "dist/cli.js"
   },
   "scripts": {
     "build": "tsup",
@@ -43,7 +43,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AmerSarhan/darce-cli.git"
+    "url": "git+https://github.com/AmerSarhan/darce-cli.git"
   },
   "homepage": "https://darce.dev",
   "files": [
