@@ -118,6 +118,8 @@ export type DarceConfig = {
   /** Suggest the next prompt after each task (uses a small fast model) */
   suggestions?: boolean
   suggestModel?: string
+  /** Second opinion (TypeSafe Jev via api.darce.dev) on scripts the rules would run unasked (default on) */
+  riskCheck?: boolean
   /** Short WHY notes when a change involved something worth learning (default on) */
   why?: boolean
   /** Models raced by /derby */

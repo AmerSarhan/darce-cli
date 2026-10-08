@@ -2,6 +2,11 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.12.5
+
+- **Try it without an account.** The first run offers 10 free requests with no sign-up; `darce signup` turns the trial into a free account and keeps your history.
+- **Effects /undo can't reverse ask first.** Deploy, migrate, seed and release scripts, database clients, and scripts that look like they change things outside your machine (a second opinion from TypeSafe Jev) now wait for you, and the prompt says /undo can't reverse them. Destructive SQL is flagged as dangerous.
+
 ## 0.12.1 – 0.12.4
 
 - `/resume`: pick any past conversation (this folder or all) and continue it.

@@ -84,6 +84,7 @@ Keys: Esc stops Darce without quitting, Shift+Enter adds a line, Up/Down walks h
 
 - Commands Darce runs don't see environment variables that look like credentials (`*_KEY`, `*_TOKEN`, `*_SECRET`, `DATABASE_URL`…). Allow one with `"passEnv": ["GH_TOKEN"]` in `~/.darcerc`.
 - Known secret formats are redacted from tool output before anything reaches a model.
+- Scripts the rules would run unasked (`npm run x`, `node scripts/x.js`, `make y`) get a second look first: Darce reads the real `package.json` script, and asks a fast classifier ([TypeSafe Jev](https://typesafe.ai), via api.darce.dev) whether running it changes anything outside your machine, given the command, the script line and the start of the file it runs. It can only make Darce more careful. Turn it off with `"riskCheck": false`.
 - A repository's own `.darcerc`, instruction files and skills can't change your approval mode, endpoints or keys, and your own skills take precedence over a repository's.
 - Your key, history and sessions are stored readable only by you.
 

@@ -67,6 +67,7 @@ import { planSwarm, laneNote, type SwarmPart } from '../core/swarm.js'
 import { trace, recentTrace } from '../utils/logger.js'
 import { SessionPicker } from './SessionPicker.js'
 import { loadSession, type SessionSummary } from '../state/sessions.js'
+import { secondOpinion, wantsSecondOpinion } from '../core/riskcheck.js'
 
 type Props = {
   provider: Provider
@@ -365,7 +366,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setProgress('busy')
 
     const authorize = async (call: { id: string; name: string; input: Record<string, unknown> }, origin?: string) => {
-      const risk = toolRisk(call.name, call.input, state.cwd)
+      let risk = toolRisk(call.name, call.input, state.cwd)
       receipt.maxRisk = Math.max(receipt.maxRisk, risk.level) as ReceiptData['maxRisk']
       const mode = modeRef.current
       // "Always allow" covers one plain command only, never chains like `npm install && curl …`
@@ -374,6 +375,12 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       if (risk.level === 0 || mode === 'full') return { allow: true as const }
       if (mode === 'plan') return { allow: false as const, reason: 'plan mode is on (read-only). Describe the change instead of making it.' }
       if (key && risk.level < 3 && trustedKeys(state.cwd).has(key)) return { allow: true as const, via: 'trusted' }
+      // A command that runs code (npm run x, node file.js, make y) gets a second look before it runs unasked
+      if (call.name === 'Bash' && risk.level === 1 && mode === 'auto' && state.config.riskCheck !== false && wantsSecondOpinion(cmdText)) {
+        const second = await secondOpinion(cmdText, state.cwd, state.config.apiKey, state.config.apiBase || undefined)
+        if (second && second.level > risk.level) risk = second
+      }
+      receipt.maxRisk = Math.max(receipt.maxRisk, risk.level) as ReceiptData['maxRisk']
       const autoOk = mode === 'auto' && risk.level <= 1 && !(taintedRef.current && call.name === 'Bash')
       if (autoOk) return { allow: true as const }
 
