@@ -2,6 +2,10 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.12.7
+
+- **Prompt caching.** Each conversation stays on one model provider and marks its repeated prefix (instructions and tool list) for caching, so follow-up calls reuse it: cheaper and faster replies, especially with Claude, Gemini and Qwen.
+
 ## 0.12.6
 
 - Fixed: after sharing an image, the next message failed with "No endpoints found that support image input" when the main model can't see images.

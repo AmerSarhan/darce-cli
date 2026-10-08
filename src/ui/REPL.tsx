@@ -735,13 +735,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     // Continue in the same session file, so the conversation keeps growing in one place
     messagesRef.current = loaded.messages
     setState(prev => ({ ...prev, sessionId: loaded.sessionId }))
+    provider.setSession?.(loaded.sessionId)
     commit({ kind: 'system', id: newId(), text: `── Resuming "${summary.title}" ──` })
     for (const item of itemsFromMessages(loaded.messages)) commit(item)
     const elsewhere = loaded.cwd && loaded.cwd !== state.cwd
     commit({ kind: 'system', id: newId(), text: `Resumed ${loaded.messages.length} messages.${elsewhere ? ` This conversation started in ${loaded.cwd}; Darce is working in ${state.cwd}, so file paths may differ.` : ''} Carry on where you left off.` })
     setContextTokens(estimateMessagesTokens(loaded.messages))
     trace('resume', { messages: loaded.messages.length, elsewhere: !!elsewhere })
-  }, [commit, setState, state.cwd])
+  }, [commit, setState, state.cwd, provider])
 
   const handleCommand = useCallback((text: string) => {
     const ctx: CommandContext = {

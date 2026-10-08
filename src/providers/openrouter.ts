@@ -91,6 +91,9 @@ export class OpenRouterProvider implements Provider {
   }
 
   /** Switch accounts without restarting. */
+  private sessionId?: string
+  setSession(id: string) { this.sessionId = id }
+
   setCredentials(apiKey: string, baseUrl?: string) {
     this.apiKey = apiKey
     if (baseUrl) this.baseUrl = baseUrl
@@ -147,9 +150,11 @@ export class OpenRouterProvider implements Provider {
     if (tools.length > 0) {
       body.tools = tools
     }
+    if (this.sessionId) body.session_id = this.sessionId
     const t0 = Date.now()
     const since = () => Date.now() - t0
     let keepalives = 0
+    let cachedTokens = 0
     let firstByte = false
     let firstToken = false
     trace('request', { model, messages: messages.length, kb: Math.round(JSON.stringify(body).length / 1024), tools: tools.length })
@@ -239,7 +244,7 @@ export class OpenRouterProvider implements Provider {
 
         for (const frame of frames) {
           if (frame.data === '[DONE]') {
-            trace('done', { model, ms: since(), tokens: usage.total_tokens, keepalives, chars: fullContent.length, toolCalls: activeToolCalls.size })
+            trace('done', { model, ms: since(), tokens: usage.total_tokens, cached: cachedTokens, keepalives, chars: fullContent.length, toolCalls: activeToolCalls.size })
             // Build final message
             const contentBlocks: ContentBlock[] = []
             if (fullContent) {
@@ -288,6 +293,7 @@ export class OpenRouterProvider implements Provider {
 
           // Extract usage if present
           if (chunk.usage) {
+            cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens ?? 0
             usage = {
               prompt_tokens: chunk.usage.prompt_tokens ?? 0,
               completion_tokens: chunk.usage.completion_tokens ?? 0,

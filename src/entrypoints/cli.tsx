@@ -211,6 +211,8 @@ async function main(modelOverride?: string, initialPrompt?: string, resumeSessio
     }
   }
 
+  provider.setSession(sessionId) // one conversation stays on one provider, so its prompt cache is reused
+
   const { setTheme } = await import('../ui/theme.js')
   setTheme(config.theme)
 
