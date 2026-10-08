@@ -176,3 +176,6 @@ export function buildSystemPrompt(cwd: string): string {
 export function resetContext() {
   cachedSystemPrompts.clear()
 }
+
+/** Sent with each message while WHY is on. Deliberately strict: a WHY note must earn its place. */
+export const WHY_NOTE = 'WHY is on. Only if this task involved a concept, pitfall or reason that is genuinely non-obvious and useful for the user to understand, end your reply with one short paragraph starting "WHY:" (one to three sentences, concrete, tied to this code: the underlying rule, not a recap of what you did). For routine or obvious work, and for questions you answered directly, write no WHY at all.'

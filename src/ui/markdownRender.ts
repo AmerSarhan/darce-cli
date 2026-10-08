@@ -126,7 +126,18 @@ function block(tok: Token, width: number, indent = 0): string {
       const text = inline(h.tokens)
       return h.depth <= 2 ? chalk.bold.hex(t.accent)(text) : chalk.bold(text)
     }
-    case 'paragraph': return wrap(inline((tok as Tokens.Paragraph).tokens), width, indent)
+    case 'paragraph': {
+      const p = tok as Tokens.Paragraph
+      // "WHY: …" paragraphs get Darce's WHY tag, as on the website
+      const why = /^\s*(?:\*\*|__)?WHY:?(?:\*\*|__)?:?\s+/.exec(p.raw)
+      if (why) {
+        const t = theme()
+        const tag = chalk.bgHex(t.accent).hex('#09090b').bold(' WHY ') + ' '
+        const body = wrap(tag + inline(Lexer.lexInline(p.raw.slice(why[0].length).trim())), width, indent + 6)
+        return ' '.repeat(indent) + body.slice(indent + 6) // tag line starts at the normal margin; the rest hangs under the text
+      }
+      return wrap(inline(p.tokens), width, indent)
+    }
     case 'text': return wrap(inline((tok as Tokens.Text).tokens) || decode((tok as Tokens.Text).text), width, indent)
     case 'list': return list(tok as Tokens.List, width, indent)
     case 'code': return code((tok as Tokens.Code).text, (tok as Tokens.Code).lang?.split(/\s/)[0] || undefined, width, indent)

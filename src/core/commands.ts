@@ -103,8 +103,9 @@ const COMMANDS: SlashCommand[] = [
     execute: (args) => `__SUGGEST__:${args.trim().toLowerCase()}`,
   },
   {
-    name: 'learn',
-    description: 'Darce explains the concepts behind each change',
+    name: 'why',
+    aliases: ['learn'],
+    description: 'Short WHY notes when a change involved something worth learning',
     execute: (args) => `__LEARN__:${args.trim().toLowerCase()}`,
   },
   {
@@ -189,7 +190,7 @@ export function executeCommand(input: string, context: CommandContext): string |
 /** Argument hints shown in the slash menu for commands that take input. */
 const ARG_HINTS: Record<string, string> = {
   model: '[search]', derby: '<task>', critic: 'on|off', mode: 'auto|ask|plan|full', upgrade: 'builder|power',
-  memory: '[forget <text>]', account: '[switch <email>]', security: '[changes]', learn: 'on|off', suggest: 'on|off',
+  memory: '[forget <text>]', account: '[switch <email>]', security: '[changes]', why: 'on|off', suggest: 'on|off',
 }
 
 export function listCommands(): Array<{ name: string; aliases: string[]; description: string; args?: string }> {

@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs'
+import { writePrivate } from '../utils/privateFile.js'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { DarceConfig, RouterConfig } from '../types.js'
@@ -55,6 +56,14 @@ function pickProjectSettings(rc: Record<string, unknown> | null): Record<string,
     } else out[k] = v
   }
   return out
+}
+
+/** Save one setting to ~/.darcerc, keeping everything else in it. */
+export function saveGlobalSetting(key: string, value: unknown): void {
+  const path = join(homedir(), '.darcerc')
+  const rc = readJsonSafe(path) ?? {}
+  rc[key] = value
+  writePrivate(path, JSON.stringify(rc, null, 2) + '\n')
 }
 
 export function loadConfig(): DarceConfig {

@@ -58,6 +58,8 @@ import { predictNext, DEFAULT_SUGGEST_MODEL } from '../core/suggest.js'
 import type { ImageContent } from '../types.js'
 import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
 import type { FileDiff } from '../utils/diff.js'
+import { saveGlobalSetting } from '../config/config.js'
+import { WHY_NOTE } from '../core/context.js'
 
 type Props = {
   provider: Provider
@@ -157,7 +159,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [, setDerbyTick] = useState(0)
   const [criticOn, setCriticOn] = useState(!!state.config.critic)
   const [livePlan, setLivePlan] = useState<PlanDisplay | null>(null)
-  const [learnOn, setLearnOn] = useState(false)
+  const [learnOn, setLearnOn] = useState(state.config.why !== false)
   const [menuIndex, setMenuIndex] = useState(0)
   const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
   const [search, setSearch] = useState<{ query: string; skip: number } | null>(null)
@@ -290,7 +292,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     commit({ kind: 'user', id: newId(), text })
     // Notes about things the user did between turns (e.g. /undo) ride along with the next message
     const notes = notesRef.current.splice(0)
-    if (learnRef.current) notes.push('learn mode is on: load the teach skill and follow it for this task')
+    if (learnRef.current) notes.push(WHY_NOTE)
     const textContent = (notes.length ? `${notes.map(n => `[Note from Darce: ${n}]`).join('\n')}\n\n${text}` : text) + attachments
     messagesRef.current = [...messagesRef.current, {
       role: 'user',
@@ -758,7 +760,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       const arg = result.slice(10)
       const on = arg === 'on' ? true : arg === 'off' ? false : !learnOn
       setLearnOn(on)
-      commit({ kind: 'system', id: newId(), text: on ? 'Learn mode on: Darce will explain the concepts behind each change and check your understanding.' : 'Learn mode off.' })
+      saveGlobalSetting('why', on)
+      commit({ kind: 'system', id: newId(), text: on ? 'WHY on: when a change involves a concept or pitfall worth knowing, Darce ends with a short WHY note. Routine changes get none.' : 'WHY off. Turn it back on with /why on.' })
       return
     }
     if (result?.startsWith('__UPGRADE__:')) {

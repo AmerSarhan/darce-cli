@@ -114,6 +114,8 @@ export type DarceConfig = {
   /** Suggest the next prompt after each task (uses a small fast model) */
   suggestions?: boolean
   suggestModel?: string
+  /** Short WHY notes when a change involved something worth learning (default on) */
+  why?: boolean
   /** Models raced by /derby */
   derbyModels?: string[]
   /** Environment variables Bash may see even though they look like secrets */
