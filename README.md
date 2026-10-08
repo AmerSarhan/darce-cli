@@ -53,6 +53,11 @@ qwen3-coder · 3.1k tokens · $0.0008 · 6s
 - **Free tier** — start without a credit card or an API key.
 - **Open source** — MIT licensed.
 
+## What's New in 0.11.0
+
+- **Easier model picking.** `/model` (or Ctrl+P) now opens with your recent models, then OpenRouter's live **most popular** ranking, then everything else. Each row shows a friendly name, vendor, price level ($ to $$$$), context size and what it can do. Search matches every word you type and ranks results by popularity.
+- `/model` and other commands with optional arguments run straight from the slash menu on Enter.
+
 ## What's New in 0.10.0
 
 - **Images and screenshots.** Press Ctrl+V to paste a screenshot from your clipboard, or drag image files into the terminal. They show up as `[Image #1]` and go to the model with your message. If your current model can't see images, Darce hands that message to a fast vision model automatically (`visionModel` in `~/.darcerc` to choose).

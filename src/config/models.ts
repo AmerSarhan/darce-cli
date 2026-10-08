@@ -97,6 +97,22 @@ const CACHE_PATH = join(homedir(), '.darce', 'models.json')
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 let catalog: ModelProfile[] = MODEL_PROFILES
+// Live "most popular" order from OpenRouter (model ids), refreshed with the catalog
+let popularity: string[] = []
+const POPULAR_URL = 'https://openrouter.ai/api/frontend/v1/models/find?active=true&fmt=cards&order=most-popular'
+
+/** Fetch OpenRouter's most-popular ranking. It's a large response, so only the order is kept. */
+async function fetchPopularity(): Promise<string[]> {
+  try {
+    const res = await fetch(POPULAR_URL, { signal: AbortSignal.timeout(15_000), headers: { Accept: 'application/json' } })
+    if (!res.ok) return []
+    const body = (await res.json()) as { data?: { models?: Array<{ slug?: string }> } | Array<{ slug?: string }> }
+    const list = Array.isArray(body.data) ? body.data : body.data?.models ?? []
+    return list.map(m => m.slug).filter((s): s is string => typeof s === 'string')
+  } catch {
+    return []
+  }
+}
 
 type OpenRouterModel = {
   id: string
@@ -132,7 +148,7 @@ export function toModelProfiles(models: OpenRouterModel[]): ModelProfile[] {
     .sort((a, b) => (b.created ?? 0) - (a.created ?? 0))
 }
 
-function readCache(): { fetchedAt: number; models: ModelProfile[] } | null {
+function readCache(): { fetchedAt: number; models: ModelProfile[]; popular?: string[] } | null {
   try {
     if (!existsSync(CACHE_PATH)) return null
     return JSON.parse(readFileSync(CACHE_PATH, 'utf-8'))
@@ -146,26 +162,38 @@ export async function loadModels(opts: { force?: boolean } = {}): Promise<ModelP
   const cached = readCache()
   if (cached?.models.length && !opts.force && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     catalog = cached.models
+    popularity = cached.popular ?? []
     return catalog
   }
 
   try {
-    const res = await fetch(MODELS_URL, { signal: AbortSignal.timeout(8000) })
+    const [res, popular] = await Promise.all([fetch(MODELS_URL, { signal: AbortSignal.timeout(8000) }), fetchPopularity()])
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json() as { data: OpenRouterModel[] }
     const models = toModelProfiles(data.data)
     if (models.length > 0) {
       catalog = models
+      // Keep only popular models Darce can actually use (tool calling)
+      const usable = new Set(models.map(m => m.id))
+      popularity = popular.filter(id => usable.has(id))
       try {
         mkdirSync(join(homedir(), '.darce'), { recursive: true })
-        writeFileSync(CACHE_PATH, JSON.stringify({ fetchedAt: Date.now(), models }))
+        writeFileSync(CACHE_PATH, JSON.stringify({ fetchedAt: Date.now(), models, popular: popularity }))
       } catch {}
       return catalog
     }
   } catch {}
 
-  if (cached?.models.length) catalog = cached.models
+  if (cached?.models.length) {
+    catalog = cached.models
+    popularity = cached.popular ?? []
+  }
   return catalog
+}
+
+/** Most popular first: OpenRouter's live ranking when available, otherwise the curated list. */
+export function popularModels(limit = 15): string[] {
+  return (popularity.length ? popularity : POPULAR_MODELS).slice(0, limit)
 }
 
 export function getModels(): ModelProfile[] {
@@ -174,4 +202,60 @@ export function getModels(): ModelProfile[] {
 
 export function getModelProfile(modelId: string): ModelProfile | undefined {
   return catalog.find(m => m.id === modelId) ?? MODEL_PROFILES.find(m => m.id === modelId)
+}
+
+
+// Popular coding models, in the order most people reach for them. OpenRouter has no public
+// popularity API, so this is curated; anything missing from the live catalog is skipped.
+export const POPULAR_MODELS = [
+  'anthropic/claude-sonnet-5.5',
+  'openai/gpt-5.6-sol',
+  'google/gemini-3.1-pro-preview',
+  'qwen/qwen3-coder',
+  'anthropic/claude-opus-5.5',
+  'deepseek/deepseek-v4-pro',
+  'moonshotai/kimi-k3',
+  'x-ai/grok-4.7',
+  'google/gemini-3.8-flash',
+  'z-ai/glm-5.3',
+  'qwen/qwen3-coder-next',
+  'deepseek/deepseek-v4.1-flash',
+]
+
+const RECENT_PATH = join(homedir(), '.darce', 'recent-models.json')
+
+export function recentModels(): string[] {
+  try {
+    const data = JSON.parse(readFileSync(RECENT_PATH, 'utf-8'))
+    return Array.isArray(data) ? data.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+export function recordModelUse(id: string) {
+  try {
+    const list = [id, ...recentModels().filter(m => m !== id)].slice(0, 6)
+    mkdirSync(join(homedir(), '.darce'), { recursive: true })
+    writeFileSync(RECENT_PATH, JSON.stringify(list))
+  } catch {}
+}
+
+/** "Claude Sonnet 5.5" from "Anthropic: Claude Sonnet 5.5" (or a tidied id). */
+export function displayName(m: ModelProfile): string {
+  if (m.name) return m.name.replace(/^[^:]+:\s*/, '')
+  return m.id.split('/').pop()!.replace(/[-_]/g, ' ')
+}
+
+export function vendorOf(id: string): string {
+  const v = id.replace(/^~/, '').split('/')[0] ?? ''
+  const names: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google', 'x-ai': 'xAI', deepseek: 'DeepSeek', qwen: 'Qwen', moonshotai: 'Moonshot', 'z-ai': 'Z.ai', 'meta-llama': 'Meta', meta: 'Meta', mistralai: 'Mistral', minimax: 'MiniMax', xiaomi: 'Xiaomi', tencent: 'Tencent', nvidia: 'NVIDIA', amazon: 'Amazon', microsoft: 'Microsoft', cohere: 'Cohere', perplexity: 'Perplexity', inception: 'Inception', baidu: 'Baidu', bytedance: 'ByteDance' }
+  return names[v] ?? v
+}
+
+/** Price level by output cost per million tokens. */
+export function priceLevel(m: ModelProfile): string {
+  const perM = m.costPer1kOutput * 1000
+  if (perM === 0) return 'free'
+  return perM < 1.5 ? '$' : perM < 6 ? '$$' : perM < 16 ? '$$$' : '$$$$'
 }

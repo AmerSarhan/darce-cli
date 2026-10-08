@@ -52,7 +52,7 @@ import { CompletionMenu, type MenuItem } from './CompletionMenu.js'
 import { listCommands } from '../core/commands.js'
 import { readFileSync, existsSync, statSync } from 'node:fs'
 import { clipboardImage, imagePathFrom, attachmentFromFile, toBase64, type Attachment } from './input/images.js'
-import { getModelProfile } from '../config/models.js'
+import { getModelProfile, recordModelUse } from '../config/models.js'
 import { predictNext, DEFAULT_SUGGEST_MODEL } from '../core/suggest.js'
 import type { ImageContent } from '../types.js'
 import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
@@ -178,8 +178,9 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (ctx.kind === 'command') {
       const cmds = listCommands()
       const ranked = ctx.query ? rank(cmds, ctx.query, c => [c.name, ...c.aliases].join(' '), 10) : cmds.slice(0, 12)
-      if (ranked.length === 1 && ranked[0]!.name === ctx.query && !ranked[0]!.args) return null
-      return { ctx, items: ranked.map(c => ({ label: `/${c.name}`, hint: c.args, detail: c.description, value: `/${c.name}`, args: !!c.args })) }
+      if (ranked.length === 1 && ranked[0]!.name === ctx.query && !ranked[0]!.args?.startsWith('<')) return null
+      // Only required arguments (<task>) keep the menu open on Enter; optional ones run the command
+      return { ctx, items: ranked.map(c => ({ label: `/${c.name}`, hint: c.args, detail: c.description, value: `/${c.name}`, args: !!c.args?.startsWith('<') })) }
     }
     const files = rank(projectFiles(state.cwd), ctx.query, f => f, 8)
     return files.length ? { ctx, items: files.map(f => ({ label: f, value: `@${f}`, args: false })) } : null
@@ -399,7 +400,10 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         const event = result.value
         switch (event.type) {
           case 'request_start':
-            if (receipt.models[receipt.models.length - 1] !== modelRef.current) receipt.models.push(modelRef.current)
+            if (receipt.models[receipt.models.length - 1] !== modelRef.current) {
+              receipt.models.push(modelRef.current)
+              recordModelUse(modelRef.current)
+            }
             buffer = ''
             committedUpTo = 0
             setActivity({ label: 'Thinking', startedAt: Date.now() })
