@@ -4,6 +4,7 @@ import { resolve, dirname, extname } from 'node:path'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
 import { loadConfig } from '../config/config.js'
+import { keyOutBackground } from '../utils/keyBackground.js'
 
 const RATIOS = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', 'auto'] as const
 
@@ -13,9 +14,9 @@ const inputSchema = z.object({
   aspect_ratio: z.enum(RATIOS).optional().describe('Defaults to 1:1'),
   resolution: z.enum(['1K', '2K']).optional().describe('1K (default) is enough for UI assets; 2K for large hero images'),
   reference_images: z.array(z.string()).max(2).optional().describe('Paths of existing images in the project to edit or match in style'),
-  model: z.enum(['gpt-image', 'nano-banana', 'nano-banana-pro', 'seedream']).optional().describe('Leave unset for the plan default. gpt-image (OpenAI): best for UI assets, icons, logos and any text in the image, and the only one with transparent backgrounds. nano-banana-pro (Google): photorealism and complex scenes. nano-banana: good alternative. seedream: different style.'),
+  model: z.enum(['gpt-image', 'nano-banana', 'nano-banana-pro', 'seedream']).optional().describe('Leave unset for the plan default. gpt-image (OpenAI): best for UI assets, icons, logos and any text in the image, nano-banana-pro (Google): photorealism and complex scenes. nano-banana: good alternative. seedream: different style.'),
   quality: z.enum(['low', 'medium', 'high']).optional().describe('gpt-image only. medium (default) for most assets; high for final hero images; low for quick drafts'),
-  transparent: z.boolean().optional().describe('Transparent background (gpt-image only): icons, logos, stickers'),
+  transparent: z.boolean().optional().describe('Transparent background, for icons, logos and stickers (saved as PNG)'),
 })
 
 type Input = z.infer<typeof inputSchema>
@@ -56,10 +57,10 @@ export const ImageTool: ToolDef<typeof inputSchema, string> = {
         method: 'POST',
         headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? '1:1', resolution: input.resolution ?? '1K', input_references: refs,
+          prompt: input.transparent ? `${input.prompt}\n\nPlace it on a plain, flat, pure white background with nothing else: no shadow, no gradient, no border.` : input.prompt, aspect_ratio: input.aspect_ratio ?? '1:1', resolution: input.resolution ?? '1K', input_references: refs,
           ...(input.model ? { model: input.model } : {}),
           ...(input.quality ? { quality: input.quality } : {}),
-          ...(input.transparent ? { background: 'transparent', model: input.model ?? 'gpt-image' } : {}),
+          // Transparent: ask for a plain white background and remove it ourselves (see keyOutBackground)
         }),
         signal: context.abortSignal ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(150_000)]) : AbortSignal.timeout(150_000),
       })
@@ -71,7 +72,11 @@ export const ImageTool: ToolDef<typeof inputSchema, string> = {
     const img = json.data?.[0]
     if (!img?.b64_json) return { data: 'Error: the image provider returned no image', isError: true }
 
-    const bytes = Buffer.from(img.b64_json, 'base64')
+    let bytes: Buffer = Buffer.from(img.b64_json, 'base64')
+    let keyed = false
+    if (input.transparent && (img.media_type ?? 'image/png') === 'image/png') {
+      try { bytes = keyOutBackground(bytes); keyed = true } catch {}
+    }
     // Keep the extension honest: a PNG is saved as .png even if another was asked for
     const want = MIME_EXT[img.media_type ?? 'image/png'] ?? '.png'
     let filePath = resolve(context.cwd, input.file_path)
@@ -83,7 +88,8 @@ export const ImageTool: ToolDef<typeof inputSchema, string> = {
     const size = pngSize(bytes)
     const rel = filePath.startsWith(context.cwd + '/') ? filePath.slice(context.cwd.length + 1) : filePath
     const by = json.model ? ` with ${json.model.split('/').pop()}` : ''
-    return { data: `Saved ${rel}${size ? ` (${size}` : ' ('}${size ? ', ' : ''}${Math.round(bytes.length / 1024)} KB)${by}${json.units ? ` · counted as ${json.units} requests` : ''}` }
+    if (input.transparent && !keyed) return { data: `Saved ${rel} with its white background (it couldn't be made transparent automatically).` }
+    return { data: `Saved ${rel}${keyed ? ' with a transparent background' : ''}${size ? ` (${size}` : ' ('}${size ? ', ' : ''}${Math.round(bytes.length / 1024)} KB)${by}${json.units ? ` · counted as ${json.units} requests` : ''}` }
   },
 
   formatResult(output: string): string { return output },
