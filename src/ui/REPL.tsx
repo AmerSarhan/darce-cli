@@ -64,6 +64,7 @@ import { runThread, Mutex, type Thread } from '../core/threads.js'
 import type { SpawnRequest } from '../types.js'
 import { ThreadsPanel } from './ThreadsPanel.js'
 import { planSwarm, laneNote, type SwarmPart } from '../core/swarm.js'
+import { trace, recentTrace } from '../utils/logger.js'
 
 type Props = {
   provider: Provider
@@ -300,6 +301,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setBusy(true)
     setSuggestion(null)
     turnThreadsFrom.current = threadsRef.current.length
+    const turnStarted = Date.now()
+    trace('turn_start', { model: modelRef.current, mode: modeRef.current, history: messagesRef.current.length })
     commit({ kind: 'user', id: newId(), text })
     // Notes about things the user did between turns (e.g. /undo) ride along with the next message
     const notes = notesRef.current.splice(0)
@@ -551,6 +554,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       abortRef.current = null
       setContextTokens(estimateMessagesTokens(messagesRef.current))
       if (messagesRef.current.length > 0) saveSession(state.sessionId, messagesRef.current, state.cwd)
+      trace('turn_end', { ms: Date.now() - turnStarted, stopped: controller.signal.aborted })
       setBusy(false)
       if (suggestRef.current && !controller.signal.aborted) {
         const snapshot = messagesRef.current
@@ -880,6 +884,10 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     }
     if (result?.startsWith('__DERBY__:')) { void startDerby(result.slice(10)); return }
     if (result?.startsWith('__SWARM__:')) { void startSwarm(result.slice(10)); return }
+    if (result?.startsWith('__DEBUG__:')) {
+      commit({ kind: 'system', id: newId(), text: `Timing log for this session (newest last). Full log: ~/.darce/logs/trace.log\n\n${recentTrace(40)}` })
+      return
+    }
     if (result?.startsWith('__THREADS__:')) {
       const all = threadsRef.current
       const n = parseInt(result.slice(12), 10)

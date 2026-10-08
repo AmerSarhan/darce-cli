@@ -135,6 +135,11 @@ const COMMANDS: SlashCommand[] = [
     execute: (args) => `__SWARM__:${args}`,
   },
   {
+    name: 'debug',
+    description: 'Show this session\'s timing log (requests, first reply, tools, waits)',
+    execute: () => `__DEBUG__:`,
+  },
+  {
     name: 'threads',
     description: 'List this session\'s threads, or show one: /threads 2',
     execute: (args) => `__THREADS__:${args.trim()}`,

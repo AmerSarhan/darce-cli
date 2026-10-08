@@ -1,6 +1,10 @@
 import { z } from 'zod'
 import { globby } from 'globby'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
+import { existsSync } from 'node:fs'
+
+// Dependency and build folders at any depth (a workspace often holds many projects)
+const DEEP_IGNORE = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/.next/**', '**/build/**', '**/.venv/**', '**/venv/**', '**/__pycache__/**', '**/target/**', '**/.turbo/**', '**/coverage/**', '**/.cache/**']
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
 
@@ -21,12 +25,20 @@ export const GlobTool: ToolDef<typeof inputSchema, string[]> = {
   async call(input: Input, context: ToolContext): Promise<ToolResult<string[]>> {
     const searchDir = input.path ? resolve(context.cwd, input.path) : context.cwd
     try {
-      const files = await globby(input.pattern, {
+      // Reading every .gitignore is slow in a folder full of projects; only do it inside one repository
+      const inRepo = existsSync(join(searchDir, '.git'))
+      const search = globby(input.pattern, {
         cwd: searchDir,
-        gitignore: true,
-        ignore: ['node_modules/**', '.git/**', 'dist/**'],
+        gitignore: inRepo,
+        ignore: DEEP_IGNORE,
         absolute: false,
+        followSymbolicLinks: false,
+        suppressErrors: true,
       })
+      const files = await Promise.race([search, new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 20_000).unref())])
+      if (files === 'timeout') {
+        return { data: [`Search took over 20s in ${input.path ?? 'this folder'}. Use a narrower path or pattern, e.g. path: "my-app/src".`], isError: true }
+      }
       return { data: files.slice(0, 500) }
     } catch (err: any) {
       return { data: [], isError: true }

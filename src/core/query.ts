@@ -3,7 +3,7 @@ import type { Provider, OpenRouterTool } from '../providers/provider.js'
 import { getTool, allTools } from '../tools/registry.js'
 import { toAPITools } from '../tools/registry.js'
 import { addUsage } from '../state/costTracker.js'
-import { debug } from '../utils/logger.js'
+import { debug, trace } from '../utils/logger.js'
 import { shouldCompact, compactMessages } from './conversation.js'
 import { redactSecrets } from '../utils/redact.js'
 
@@ -55,6 +55,7 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
   while (true) {
     turnCount++
     if (turnCount > maxTurns) {
+      trace('max_turns', { turns: maxTurns })
       return { reason: 'max_turns', messages }
     }
 
@@ -136,15 +137,18 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
     // Approve one call (approvals are always asked one at a time)
     async function approve(block: ToolUseContent): Promise<{ ok: true; via?: string } | { ok: false; denied: string }> {
       if (params.abortSignal?.aborted) return { ok: false, denied: 'Not run: the user interrupted.' }
+      const asked = Date.now()
       const decision = params.authorize
         ? await params.authorize({ id: block.id, name: block.name, input: block.input })
         : { allow: true as const }
+      if (Date.now() - asked > 500) trace('approval', { tool: block.name, waitedMs: Date.now() - asked, allowed: decision.allow })
       return decision.allow ? { ok: true, via: decision.via } : { ok: false, denied: `Not run: ${decision.reason}` }
     }
 
     function finish(block: ToolUseContent, executed: { result: string; isError?: boolean; display?: ToolDisplay }, started: number): StreamEvent {
       // Never send credentials to the model, even if a file or command printed them
       const { text: result, count: redacted } = redactSecrets(executed.result)
+      trace('tool', { tool: block.name, ms: Date.now() - started, error: !!executed.isError, chars: result.length })
       if (executed.isError && !retriedToolIds.has(block.id)) retriedToolIds.add(block.id)
       record(block.id, result, executed.isError)
       return { type: 'tool_result_ready', id: block.id, name: block.name, result, isError: executed.isError, durationMs: Date.now() - started, display: executed.display, redacted }

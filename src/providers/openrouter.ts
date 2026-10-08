@@ -1,5 +1,5 @@
 import { parseSSEFrames } from '../core/streaming.js'
-import { debug } from '../utils/logger.js'
+import { debug, trace } from '../utils/logger.js'
 import type { Message, StreamEvent, TokenUsage, ContentBlock } from '../types.js'
 import type { Provider, OpenRouterTool } from './provider.js'
 
@@ -102,6 +102,7 @@ export class OpenRouterProvider implements Provider {
       arm()
       try {
         for await (const ev of this.streamOnce(messages, model, tools, stall.signal, arm)) {
+          if (ev.type === 'error') trace('error', { model, error: ev.error.slice(0, 200) })
           if (ev.type !== 'request_start') produced = true
           yield ev
         }
@@ -109,6 +110,8 @@ export class OpenRouterProvider implements Provider {
         clearTimeout(timer)
         signal?.removeEventListener('abort', forward)
       }
+      if (signal?.aborted) trace('aborted', { model })
+      if (stalled) trace('stall', { model, attempt, produced, after: STALL_MS })
       if (!stalled || signal?.aborted) return
       const secs = Math.round(STALL_MS / 1000)
       if (produced) {
@@ -131,6 +134,12 @@ export class OpenRouterProvider implements Provider {
     if (tools.length > 0) {
       body.tools = tools
     }
+    const t0 = Date.now()
+    const since = () => Date.now() - t0
+    let keepalives = 0
+    let firstByte = false
+    let firstToken = false
+    trace('request', { model, messages: messages.length, kb: Math.round(JSON.stringify(body).length / 1024), tools: tools.length })
 
     let response: Response
     let retries = 0
@@ -151,6 +160,7 @@ export class OpenRouterProvider implements Provider {
         })
 
         onActivity()
+        trace('headers', { model, status: response.status, ms: since() })
         if (response.status === 429 && retries < maxRetries) {
           retries++
           const delay = Math.min(1000 * Math.pow(2, retries), 8000)
@@ -204,15 +214,19 @@ export class OpenRouterProvider implements Provider {
           return
         }
         const { done, value } = readResult
-        if (done) break
+        if (done) { trace('stream_end', { model, ms: since(), keepalives, sawDone: false }); break }
         onActivity()
+        if (!firstByte) { firstByte = true; trace('first_byte', { model, ms: since() }) }
 
-        buffer += decoder.decode(value, { stream: true })
+        const text = decoder.decode(value, { stream: true })
+        keepalives += text.split('OPENROUTER PROCESSING').length - 1
+        buffer += text
         const { frames, remaining } = parseSSEFrames(buffer)
         buffer = remaining
 
         for (const frame of frames) {
           if (frame.data === '[DONE]') {
+            trace('done', { model, ms: since(), tokens: usage.total_tokens, keepalives, chars: fullContent.length, toolCalls: activeToolCalls.size })
             // Build final message
             const contentBlocks: ContentBlock[] = []
             if (fullContent) {
@@ -253,6 +267,11 @@ export class OpenRouterProvider implements Provider {
           } catch {
             continue
           }
+          if (!firstToken && (chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.delta?.tool_calls)) {
+            firstToken = true
+            trace('first_token', { model, ms: since(), keepalives })
+          }
+          if (chunk.error) trace('upstream_error', { model, ms: since(), error: String(chunk.error?.message ?? chunk.error).slice(0, 200) })
 
           // Extract usage if present
           if (chunk.usage) {

@@ -44,6 +44,8 @@ export function Spinner({ label, startedAt }: { label: string; startedAt: number
       <Text color={t.accent}>{FRAMES[Math.floor(frame * (reducedMotion ? 1 : 0.6)) % FRAMES.length]} </Text>
       <Shimmer text={shown} time={time} base={t.muted} peak={t.text} />
       <Text color={t.faint}>  {seconds}s · esc to stop</Text>
+      {/* Waiting on the model this long is the provider being slow, not Darce: say so and offer a way out */}
+      {label === 'Thinking' && seconds >= 20 ? <Text color={t.faint}> · slow reply, Shift+↑/↓ switches model</Text> : null}
     </Text>
   )
 }
