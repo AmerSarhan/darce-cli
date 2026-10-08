@@ -287,8 +287,15 @@ async function printMain(modelOverride?: string, prompt?: string) {
   const { toolRisk } = await import('../core/risk.js')
   const mode = config.mode ?? 'auto'
   // No one can answer a prompt here: safe steps run, anything that would ask is declined
+  const { secondOpinion, wantsSecondOpinion } = await import('../core/riskcheck.js')
   const authorize = async (call: { name: string; input: Record<string, unknown> }) => {
-    const risk = toolRisk(call.name, call.input, process.cwd())
+    let risk = toolRisk(call.name, call.input, process.cwd())
+    // Same second look as the interactive app for scripts the rules would run unasked
+    const cmdText = String(call.input.command ?? '')
+    if (call.name === 'Bash' && risk.level === 1 && mode === 'auto' && config.riskCheck !== false && wantsSecondOpinion(cmdText)) {
+      const second = await secondOpinion(cmdText, process.cwd(), config.apiKey, config.apiBase || undefined)
+      if (second && second.level > risk.level) risk = second
+    }
     if (mode === 'full' || risk.level === 0) return { allow: true as const }
     if (mode === 'plan') return { allow: false as const, reason: 'plan mode is on (read-only).' }
     if (mode === 'auto' && risk.level <= 1) return { allow: true as const }

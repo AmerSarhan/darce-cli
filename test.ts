@@ -53,6 +53,7 @@ import { renderTerminalMarkdown } from './src/ui/markdownRender.js'
 import { buildSystemPrompt, resetContext } from './src/core/context.js'
 import type { ToolContext, Message, RouterConfig } from './src/types.js'
 import { isCodingModel } from './src/config/models.js'
+import { wantsSecondOpinion } from './src/core/riskcheck.js'
 
 // ============================================================
 // Test framework
@@ -1157,6 +1158,8 @@ async function testPhase1() {
     await test(`Risk: "${cmd}" asks first (outside effects)`, () => bashRisk(cmd, '/repo').level >= 2)
   await test('Risk: destructive SQL is level 3', () => bashRisk('psql $DATABASE_URL -c "drop table users"', '/repo').level === 3)
   await test('Risk: everyday scripts still run', () => ['npm test', 'npm run build', 'npm run dev', 'make test', 'node index.js'].every(c => bashRisk(c, '/repo').level === 1))
+  await test('Second opinion: chained and wrapped scripts are still checked', () =>
+    wantsSecondOpinion('cd app && npm run sync; echo $?') && wantsSecondOpinion('timeout 60 npm run sync') && wantsSecondOpinion('env X=1 node scripts/x.js') && !wantsSecondOpinion('ls -la && git status'))
   await test('Risk: cd into the project is read-only', () => bashRisk('cd /repo/src && ls -la', '/repo').level === 0)
   await test('Risk: cd outside the project asks', () => bashRisk('cd /etc && ls', '/repo').level === 2)
   await test('Risk: git config --get stays read-only', () => bashRisk('git config --get user.name', '/repo').level === 0)

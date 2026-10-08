@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, statSync } from 'node:fs'
 import { resolve, relative, isAbsolute } from 'node:path'
 import { parse } from 'shell-quote'
-import { bashRisk, type Risk } from './risk.js'
+import { bashRisk, unwrap, WRAPPERS, type Risk } from './risk.js'
 import { trace } from '../utils/logger.js'
 
 /**
@@ -34,18 +34,32 @@ function readHead(path: string, cwd: string, max = 4000): string | undefined {
   }
 }
 
-/** The command's first word and arguments (ignoring VAR=value prefixes), or null for chains. */
-function firstCommand(command: string): string[] | null {
+/** Each simple command in a line (`cd x && npm run sync; echo $?` → three), VAR=value prefixes dropped. */
+function commands(command: string): string[][] {
   try {
-    const tokens = parse(command, (n: string) => `$${n}`)
-    if (!tokens.every(t => typeof t === 'string')) return null
-    const words = tokens as string[]
-    let i = 0
-    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!)) i++
-    return words.slice(i)
+    const out: string[][] = [[]]
+    for (const t of parse(command, (n: string) => `$${n}`)) {
+      if (typeof t === 'string') out[out.length - 1]!.push(t)
+      else if ('op' in t && !['>', '>>', '<', '>&', '&>', '<<'].includes((t as { op: string }).op)) out.push([])
+    }
+    return out.map(words => {
+      let i = 0
+      while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!)) i++
+      let w = words.slice(i)
+      // Look through wrappers: `timeout 60 npm run sync`, `env X=1 node x.js`, `nice make deploy`
+      while (w.length && WRAPPERS.has(w[0]!.split('/').pop()!)) w = unwrap(w[0]!.split('/').pop()!, w.slice(1))
+      return w
+    }).filter(w => w.length > 0)
   } catch {
-    return null
+    return []
   }
+}
+
+const firstCommand = (command: string): string[] | null => commands(command)[0] ?? null
+
+/** The part of a line that runs code, e.g. `npm run sync` in `cd app && npm run sync; echo $?`. */
+function codePart(command: string): string[] | undefined {
+  return commands(command).find(w => { const c = w[0]!.split('/').pop()!; return RUNNERS.has(c) || CODE_RUNNERS.has(c) || w[0]!.startsWith('./') })
 }
 
 /** The package.json script a runner command executes, if any. */
@@ -73,16 +87,14 @@ function scriptFile(words: string[]): string | undefined {
 }
 
 export function wantsSecondOpinion(command: string): boolean {
-  const words = firstCommand(command)
-  if (!words?.length) return false
-  const cmd = words[0]!.split('/').pop()!
-  return RUNNERS.has(cmd) || CODE_RUNNERS.has(cmd) || words[0]!.startsWith('./')
+  return !!codePart(command)
 }
 
 export async function secondOpinion(command: string, cwd: string, apiKey: string, apiBase = 'https://api.darce.dev'): Promise<Risk | null> {
   const key = `${cwd}\0${command}`
   if (cache.has(key)) return cache.get(key)!
-  const words = firstCommand(command)
+  // Models usually prefix `cd <dir> &&`; judge the part that actually runs code
+  const words = codePart(command)
   if (!words) return null
 
   // 1. The script's real command, scored by the rules

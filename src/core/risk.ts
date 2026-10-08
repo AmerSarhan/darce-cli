@@ -20,7 +20,7 @@ const READ_ONLY = new Set([
 ])
 
 // Commands that run another command: score the wrapped command instead
-const WRAPPERS = new Set(['env', 'xargs', 'timeout', 'nice', 'nohup', 'command', 'builtin', 'exec', 'time', 'stdbuf', 'caffeinate', 'unbuffer'])
+export const WRAPPERS = new Set(['env', 'xargs', 'timeout', 'nice', 'nohup', 'command', 'builtin', 'exec', 'time', 'stdbuf', 'caffeinate', 'unbuffer'])
 // Interpreters: running a project file is "changes the project", but inline code is opaque
 const INTERPRETERS = new Set(['node', 'nodejs', 'tsx', 'ts-node', 'python', 'python3', 'ruby', 'php', 'perl', 'deno', 'bun', 'lua', 'Rscript', 'osascript'])
 const INLINE_FLAGS = new Set(['-e', '-c', '-p', '-r', '-E', '--eval', '--print', '-pe', '-ne', '-le'])
@@ -97,7 +97,7 @@ export function outside(path: string, cwd: string): boolean {
 }
 
 /** Strip leading options of a wrapper command (and the duration for timeout) to find the wrapped command. */
-function unwrap(cmd: string, args: string[]): string[] {
+export function unwrap(cmd: string, args: string[]): string[] {
   let j = 0
   const takesValue = new Set(['-n', '-u', '-s', '-k', '-I', '-L', '-P', '-d', '-E', '-i', '-o', '-e', '--signal', '--kill-after', '--adjustment', '-C', '-S'])
   while (j < args.length) {
