@@ -5,6 +5,8 @@ Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest f
 ## 0.12.8
 
 - **Better images.** Images now come from OpenAI's GPT Image 2.5 by default on every plan: sharper, great with text, and it can make transparent backgrounds for icons and logos. A default image counts as 2 requests. Google's Nano Banana 2 and Pro (paid plans) and Seedream are available too.
+- **Transparent images without holes.** Icons and logos with solid fills keep their fills when the background is removed.
+- **WHY notes you'll actually see.** When a fix hinges on something the code doesn't show (floating point, React effect rules, async ordering, SQL injection), Darce now reliably ends with a short WHY note, and skips it for routine edits. Toggle with `/why on|off`.
 
 ## 0.12.7
 

@@ -31,7 +31,7 @@ The first run lets you try it straight away with 10 free requests, no account ne
 - **Swarms.** `/swarm <task>` has a lead agent split the work into 2-4 independent parts. Each runs as its own agent in a separate git worktree, at the same time, and the results merge back in one step (`/undo` reverts the lot).
 - **Model derby.** `/derby <task>` races three models on the same task in separate worktrees. Compare their diffs, test results and cost, then keep the one you'd merge.
 - **250+ coding models.** Claude, GPT, Gemini, Qwen, DeepSeek, Kimi, GLM, Grok and more, live from OpenRouter, filtered to models that can actually drive an agent. Switch mid-task with Shift+↑/↓.
-- **It tells you why.** When a change involved something genuinely worth knowing, Darce ends with a short WHY note. Routine work gets none.
+- **It tells you why.** When a fix hinges on something you can't see in the code (a language quirk, a React rule, async ordering, SQL injection), Darce ends with a short WHY note so you spot it next time. Routine edits get none.
 
 <p align="center">
   <img src="assets/demo-swarm.gif" width="880" alt="/swarm splits a task into three threads that run in parallel in their own worktrees, then merges them; 17 tests pass">
@@ -40,7 +40,7 @@ The first run lets you try it straight away with 10 free requests, no account ne
 ## What else it does
 
 - **Threads.** The agent can hand research to sub-agents with their own context; several run in parallel. `/threads` shows what each one did.
-- **Images.** Generates icons, illustrations and hero images into your project (Seedream 5.0 Flash).
+- **Images.** Generates icons, illustrations and hero images into your project, with transparent backgrounds when you ask (GPT Image by default; Gemini and Seedream on request).
 - **Resume.** `/resume` picks up any past conversation, in this folder or any other.
 - **Skills and memory.** Drop a `SKILL.md` into `.darce/skills/` to teach it your team's way of doing things; it remembers your preferences across sessions.
 - **Screenshots.** Paste one with Ctrl+V and Darce can see it.
