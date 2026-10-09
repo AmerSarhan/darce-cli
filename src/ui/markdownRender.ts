@@ -120,7 +120,10 @@ function table(tok: Tokens.Table, width: number): string {
 
 /** A WHY that only says the change was simple teaches nothing; some models write one anyway. */
 export function isFillerWhy(body: string): boolean {
-  return /^\W*(this|it|that)\s+(is|was)\s+(just\s+|only\s+)?(a|an)?\s*(simple|straightforward|routine|basic|minor|trivial|standard|small|quick)\b/i.test(body.trim())
+  const b = body.trim()
+  // "This was a simple rename" teaches nothing; neither does commentary on the answer itself ("The analysis focuses on…")
+  return /^\W*(this|it|that)\s+(is|was)\s+(just\s+|only\s+)?(a|an)?\s*(simple|straightforward|routine|basic|minor|trivial|standard|small|quick)\b/i.test(b)
+    || /^\W*(the|this|my)\s+(analysis|review|overview|summary|assessment|evaluation|response|answer|approach)\s+(focuses|looks|covers|highlights|is|was|aims|takes)\b/i.test(b)
 }
 
 function block(tok: Token, width: number, indent = 0): string {

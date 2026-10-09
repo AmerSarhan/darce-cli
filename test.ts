@@ -1355,7 +1355,8 @@ async function testBrain() {
   await test('WHY: filler notes are dropped, real ones keep their tag', () => {
     const filler = renderTerminalMarkdown('Renamed it.\n\nWHY: This is a straightforward rename for clarity.', 80)
     const real = renderTerminalMarkdown('Fixed.\n\nWHY: forEach ignores the promises its callback returns, so nothing waits.', 80)
-    return !filler.includes('WHY') && filler.includes('Renamed it.') && real.includes('WHY') && real.includes('forEach ignores')
+    const meta = renderTerminalMarkdown('Thoughts above.\n\nWHY: The analysis focuses on architectural patterns because they determine maintainability.', 80)
+    return !filler.includes('WHY') && filler.includes('Renamed it.') && real.includes('WHY') && real.includes('forEach ignores') && !meta.includes('WHY')
   })
   await test('Stream: server waiting pings become waiting events, then the answer streams', async () => {
     const { createServer } = await import('node:http')

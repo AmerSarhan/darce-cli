@@ -8,10 +8,12 @@ type Props = {
   busy: boolean
   dimmed?: boolean
   suggestion?: string | null
+  /** Replaces the usual hint, e.g. while a board on screen has the keys */
+  placeholder?: string
 }
 
 /** Renders the editable prompt. All key handling lives in REPL via input/keys.ts. */
-export function Prompt({ editor, busy, dimmed = false, suggestion }: Props) {
+export function Prompt({ editor, busy, dimmed = false, suggestion, placeholder }: Props) {
   const t = theme()
   const { lines, line: cursorLine, col } = cursorPosition(editor)
   const empty = editor.text.length === 0
@@ -30,7 +32,7 @@ export function Prompt({ editor, busy, dimmed = false, suggestion }: Props) {
                 {suggestion && !busy && !dimmed
                   ? <Text><Text color={t.faint}>{suggestion}</Text><Text color={t.faint} dimColor>   tab ↹</Text></Text>
                   : <Text color={t.faint}>
-                      {busy ? 'Type to queue a message · Esc stops Darce' : 'Ask Darce to change, fix or explain something'}
+                      {placeholder ?? (busy ? 'Type to queue a message · Esc stops Darce' : 'Ask Darce to change, fix or explain something')}
                     </Text>}
               </Text>
             ) : hasCursor ? (

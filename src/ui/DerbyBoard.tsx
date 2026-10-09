@@ -2,9 +2,13 @@ import React from 'react'
 import { Box, Text, useAnimation } from 'ink'
 import { theme } from './theme.js'
 import { DiffView } from './DiffView.js'
+import { Markdown } from './Markdown.js'
 import type { Racer } from '../core/derby.js'
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+
+const ANSWER_LINES = 18
+const answerLines = (s: string) => s.trim().split('\n').length
 
 function secs(ms: number) {
   return `${Math.round(ms / 1000)}s`
@@ -48,7 +52,15 @@ export function DerbyBoard({ task, racers, selected, finished, variant = 'derby'
           )
         })}
       </Box>
-      {finished && pick ? (
+      {pick && pick.status !== 'done' && pick.status !== 'error' && pick.status !== 'stopped' ? (
+        <Box marginTop={1}><Text color={t.faint}>{swarm ? pick.title : pick.model.split('/').pop()} is still working ({pick.activity}).</Text></Box>
+      ) : null}
+      {pick && !pick.diffs.length && pick.status === 'done' && pick.answer.trim() ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={t.muted}>{swarm ? pick.title : pick.model.split('/').pop()}'s answer{answerLines(pick.answer) > ANSWER_LINES ? ` (first ${ANSWER_LINES} lines; enter shows all)` : ''}</Text>
+          <Markdown text={pick.answer.trim().split('\n').slice(0, ANSWER_LINES).join('\n')} />
+        </Box>
+      ) : pick && pick.diffs.length && (pick.status === 'done' || finished) ? (
         <Box flexDirection="column" marginTop={1}>
           <Text color={t.muted}>{swarm ? pick.title : pick.model}{pick.answer ? ': ' : ''}<Text color={t.text}>{pick.answer.trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 220)}</Text></Text>
           {pick.diffs.slice(0, 2).map(d => (
@@ -58,7 +70,6 @@ export function DerbyBoard({ task, racers, selected, finished, variant = 'derby'
             </Box>
           ))}
           {pick.diffs.length > 2 ? <Text color={t.faint}>… and {pick.diffs.length - 2} more files</Text> : null}
-          {pick.diffs.length === 0 ? <Text color={t.faint}>No file changes from this model.</Text> : null}
         </Box>
       ) : null}
       <Box marginTop={1}>
@@ -66,8 +77,10 @@ export function DerbyBoard({ task, racers, selected, finished, variant = 'derby'
           {finished
             ? swarm
               ? <><Text color={t.accent}>1-{racers.length} / ↑↓</Text> inspect   <Text color={t.accent}>enter</Text> merge all threads   <Text color={t.accent}>esc</Text> discard all</>
-              : <><Text color={t.accent}>1-{racers.length} / ↑↓</Text> compare   <Text color={t.accent}>enter</Text> apply this one   <Text color={t.accent}>esc</Text> discard all</>
-            : <><Text color={t.accent}>esc</Text> {swarm ? 'stop the swarm' : 'stop the race'}</>}
+              : <><Text color={t.accent}>1-{racers.length} / ↑↓</Text> compare   <Text color={t.accent}>enter</Text> {pick?.diffs.length ? 'apply this one' : 'use this answer'}   <Text color={t.accent}>esc</Text> discard all</>
+            : swarm
+              ? <><Text color={t.accent}>1-{racers.length} / ↑↓</Text> inspect   <Text color={t.accent}>esc</Text> stop the swarm</>
+              : <><Text color={t.accent}>1-{racers.length} / ↑↓</Text> inspect   <Text color={t.accent}>enter</Text> use a finished one now   <Text color={t.accent}>esc</Text> stop the race</>}
         </Text>
       </Box>
     </Box>

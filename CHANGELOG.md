@@ -2,6 +2,11 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.12.11
+
+- **Derby you can steer.** While models race, press 1-3 or ↑↓ to read any finished one, and Enter to take it right away (the rest stop). Questions work too: if the winner changed no files, its answer becomes Darce's reply, shown in full on the board. The prompt line no longer claims you can type while the board has the keys.
+- **Fewer filler WHY notes.** Opinions, reviews and overviews no longer get a WHY, and notes that only describe the answer itself are dropped.
+
 ## 0.12.10
 
 - **No freeze in big folders.** Starting Darce in a folder that holds many projects (each with its own node_modules) could pin the CPU and freeze the screen while it listed files for @mentions. File listing now uses git where it can, skips dependency folders at any depth, and stops early; a 100-project folder lists in under 0.2s. Broad Glob searches outside a repository stop early too.

@@ -687,7 +687,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const finishDerby = useCallback((applyIndex: number | null) => {
     if (!derby) return
     const { d, task } = derby
-    if (applyIndex !== null) {
+    if (applyIndex !== null && !d.racers[applyIndex]!.diffs.length) {
+      // A question, not a change: the picked model's answer becomes Darce's reply
+      const r = d.racers[applyIndex]!
+      commit({ kind: 'assistant', id: newId(), text: r.answer.trim() })
+      commit({ kind: 'system', id: newId(), text: `That was ${r.model.split('/').pop()}'s answer ($${r.cost.toFixed(4)}, ${Math.round(r.ms / 1000)}s).` })
+      messagesRef.current = [...messagesRef.current, { role: 'user', content: task }, { role: 'assistant', content: r.answer.trim() }]
+      setContextTokens(estimateMessagesTokens(messagesRef.current))
+    } else if (applyIndex !== null) {
       const r = d.racers[applyIndex]!
       checkpointsRef.current!.snapshot(`Derby: apply ${r.model.split('/').pop()}`)
       const { files } = d.apply(applyIndex)
@@ -1067,10 +1074,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       return
     }
     if (derby) {
-      if (!derby.finished) {
-        if (key.escape || (key.ctrl && input === 'c')) derby.d.stop()
-        return
-      }
+      // Racers can be inspected while the others are still going; a finished one can be picked right away
       const n = derby.d.racers.length
       const num = parseInt(input, 10)
       if (num >= 1 && num <= n) setDerby({ ...derby, selected: num - 1 })
@@ -1078,14 +1082,19 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       else if (key.downArrow) setDerby({ ...derby, selected: (derby.selected + 1) % n })
       else if (key.return) {
         if (derby.variant === 'swarm') {
-          if (derby.d.racers.some(r => r.status === 'done' && r.diffs.length)) finishSwarm(true)
+          if (!derby.finished) flashHint('Threads are still working. Wait for them, or Esc to stop.')
+          else if (derby.d.racers.some(r => r.status === 'done' && r.diffs.length)) finishSwarm(true)
           else flashHint('No thread made changes. Esc to close.')
           return
         }
         const r = derby.d.racers[derby.selected]!
-        if (r.diffs.length) finishDerby(derby.selected)
-        else flashHint('That model made no changes. Pick another, or Esc to discard.')
-      } else if (key.escape || (key.ctrl && input === 'c')) (derby.variant === 'swarm' ? finishSwarm(false) : finishDerby(null))
+        if (r.status !== 'done') flashHint(`${r.model.split('/').pop()} is still working. Pick a finished one, or wait.`)
+        else if (!r.diffs.length && !r.answer.trim()) flashHint('That model came back empty. Pick another, or Esc to discard.')
+        else { if (!derby.finished) derby.d.stop(); finishDerby(derby.selected) }
+      } else if (key.escape || (key.ctrl && input === 'c')) {
+        if (!derby.finished) derby.d.stop()
+        else (derby.variant === 'swarm' ? finishSwarm(false) : finishDerby(null))
+      }
       return
     }
     if (search) {
@@ -1318,7 +1327,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           />
         )}
 
-        <Prompt editor={editor} busy={busy} dimmed={showPicker || showSessions || !!pending || !!tape || !!derby} suggestion={suggestion} />
+        <Prompt editor={editor} busy={busy} dimmed={showPicker || showSessions || !!pending || !!tape || !!derby} suggestion={suggestion} placeholder={derby ? `The ${derby.variant === 'swarm' ? 'swarm' : 'race'} board above has the keys` : undefined} />
         {attachments.filter(a => editor.text.includes(`[Image #${a.n}]`)).map(a => (
           <Text key={a.n} color={t.faint}>
             {'  '}<Text color={t.accent}>▣</Text> Image #{a.n}  {a.name}{a.width ? `  ${a.width}×${a.height}` : ''}  {Math.round(a.bytes / 1024)} KB
