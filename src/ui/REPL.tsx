@@ -60,6 +60,7 @@ import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
 import type { FileDiff } from '../utils/diff.js'
 import { saveGlobalSetting } from '../config/config.js'
 import { WHY_NOTE } from '../core/context.js'
+import { Narrator, firstNameFromEmail, findPlayer, VOICE_NAMES } from '../core/voice.js'
 import { runThread, Mutex, type Thread } from '../core/threads.js'
 import type { SpawnRequest } from '../types.js'
 import { ThreadsPanel } from './ThreadsPanel.js'
@@ -212,6 +213,21 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     return editor.history.filter(h => h.toLowerCase().includes(q))
   }, [search, editor.history])
   const learnRef = useRef(false)
+  const [voiceOn, setVoiceOn] = useState(state.config.voice === true)
+  const voiceRef = useRef(voiceOn)
+  voiceRef.current = voiceOn
+  const voiceIdRef = useRef(state.config.voiceId || 'erik')
+  const voiceNameRef = useRef(state.config.voiceName || firstNameFromEmail(listAccounts().active))
+  const narratorRef = useRef<Narrator | null>(null)
+  if (!narratorRef.current) {
+    narratorRef.current = new Narrator({
+      apiKey: state.config.apiKey,
+      apiBase: state.config.apiBase || 'https://api.darce.dev',
+      name: () => voiceNameRef.current,
+      voice: () => voiceIdRef.current,
+    })
+  }
+  useEffect(() => () => narratorRef.current?.stop(), [])
   learnRef.current = learnOn
   const lastEsc = useRef(0)
   const [tainted, setTainted] = useState(false)
@@ -338,6 +354,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const receipt: ReceiptData = { files: [], commands: 0, approvedByYou: 0, denied: 0, maxRisk: 0, redacted: 0, models: [], tokens: 0, cost: 0, ms: 0, undoable: true, stopped: false }
     const fileStats = new Map<string, { path: string; added: number; removed: number; created: boolean }>()
     const checkpointsAtStart = checkpointsRef.current?.count ?? 0
+    // Voice: a line when a task turns out to be long, when something runs a while, when Darce needs you, and at the end
+    const voice = voiceRef.current ? narratorRef.current : null
+    const spoke = { start: false, progress: false, error: false }
+    const did: string[] = []
+    let lastText = ''
+    const voiceContext = (extra = '') => [`User asked: "${text.slice(0, 300)}"`, did.length ? `Darce so far: ${did.slice(-8).join('; ')}` : '', extra].filter(Boolean).join('\n')
+    const startVoice = voice ? setTimeout(() => { spoke.start = true; voice.say('start', voiceContext()) }, 6_000) : undefined
+    let slowTool: ReturnType<typeof setTimeout> | undefined
     let steps = 0
 
     // Streaming text: complete markdown blocks are frozen into the transcript,
@@ -386,6 +410,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       if (autoOk) return { allow: true as const }
 
       if (Date.now() - startedAt > 10_000) notify('Darce needs approval', `${call.name} ${toolSummary(call.name, call.input)}`)
+      voice?.say('ask', voiceContext(`Darce is waiting for approval to run: ${call.name === 'Bash' ? String(call.input.command ?? '') : `${call.name} ${toolSummary(call.name, call.input)}`} (${risk.reason})`))
       setActivity(null)
       return new Promise<{ allow: true; via?: string } | { allow: false; reason: string }>(resolveDecision => {
         setPending({
@@ -475,6 +500,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             setActivity({ label: `Preparing ${event.name}`, startedAt: Date.now() })
             break
           case 'message_complete':
+            if (buffer.trim()) lastText = buffer
             flush(true)
             break
           case 'tool_executing': {
@@ -482,9 +508,16 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             summaries.set(event.id, summary)
             if (event.via) approvals.set(event.id, event.via === 'trusted' ? 'always allowed' : event.via)
             setActivity({ label: `${event.name} ${summary}`.trim(), startedAt: Date.now() })
+            did.push(`${event.name} ${summary}`.trim())
+            if (voice && event.name === 'Bash' && !spoke.progress) {
+              clearTimeout(slowTool)
+              slowTool = setTimeout(() => { spoke.progress = true; voice.say('progress', voiceContext(`Running for a while now: ${String(event.input.command ?? '')}`)) }, 12_000)
+            }
             break
           }
           case 'tool_result_ready': {
+            clearTimeout(slowTool)
+            if (event.isError && event.name === 'Bash') did.push(`(that command failed: ${event.result.slice(0, 120)})`)
             // The plan is shown as a live checklist, not as a tool line
             if (event.display?.kind === 'plan') {
               setLivePlan(event.display)
@@ -534,6 +567,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           case 'error':
             flush(true)
             commit({ kind: 'error', id: newId(), text: event.error })
+            if (voice && !spoke.error) { spoke.error = true; voice.say('error', voiceContext(`It stopped with this error: ${event.error.slice(0, 300)}`)) }
             break
         }
         result = await gen.next()
@@ -571,6 +605,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         receipt.undoable = checkpointsRef.current!.count > 0
         receipt.stopped = controller.signal.aborted
         commit({ kind: 'receipt', id: newId(), data: receipt })
+      }
+      clearTimeout(startVoice); clearTimeout(slowTool)
+      if (voice) {
+        if (controller.signal.aborted) voice.stop()
+        else if (!spoke.error && (spoke.start || took >= 15_000)) {
+          const files = receipt.files?.length ? `Files changed: ${receipt.files.map(f => `${f.path} (+${f.added} -${f.removed})`).slice(0, 6).join(', ')}.` : ''
+          voice.say('done', voiceContext(`Finished. ${files}\nDarce's final message: ${(lastText || buffer).trim().slice(0, 600)}`))
+        }
       }
       if (flushTimer) clearTimeout(flushTimer)
       setTail('')
@@ -897,6 +939,31 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       commit({ kind: 'system', id: newId(), text: on
         ? `Next-step suggestions on: after each task, ${(state.config.suggestModel || DEFAULT_SUGGEST_MODEL).split('/').pop()} predicts what you'll ask next. Tab accepts. Each prediction is one small request.`
         : 'Next-step suggestions off.' })
+      return
+    }
+    if (result?.startsWith('__VOICE__:')) {
+      const arg = result.slice(10).trim()
+      const lower = arg.toLowerCase()
+      const narrator = narratorRef.current!
+      narrator.onLimit = message => { commit({ kind: 'system', id: newId(), text: `Voice: ${message}` }); setVoiceOn(false); saveGlobalSetting('voice', false) }
+      if (lower.startsWith('name ')) {
+        voiceNameRef.current = arg.slice(5).trim().slice(0, 24)
+        saveGlobalSetting('voiceName', voiceNameRef.current)
+        commit({ kind: 'system', id: newId(), text: voiceNameRef.current ? `Darce will call you ${voiceNameRef.current}.` : 'Darce won\'t use your name.' })
+        return
+      }
+      const pick = (VOICE_NAMES as readonly string[]).includes(lower) ? lower : null
+      if (pick) { voiceIdRef.current = pick; saveGlobalSetting('voiceId', pick) }
+      const on = pick ? true : lower === 'on' ? true : lower === 'off' ? false : !voiceOn
+      setVoiceOn(on)
+      saveGlobalSetting('voice', on)
+      if (!on) { narrator.stop(); commit({ kind: 'system', id: newId(), text: 'Voice off. Turn it back on with /voice on.' }); return }
+      if (!findPlayer()) {
+        commit({ kind: 'system', id: newId(), text: process.platform === 'linux' ? 'Voice is on, but there\'s no audio player to play it with. Install one, for example: sudo apt install mpg123' : 'Voice is on, but no audio player was found on this machine.' })
+        return
+      }
+      commit({ kind: 'system', id: newId(), text: `Voice on (${voiceIdRef.current}${voiceNameRef.current ? `, calling you ${voiceNameRef.current}` : ''}). Darce speaks up when a task runs long, when it needs you, and when it's done. Quick tasks stay quiet. Voices: ${VOICE_NAMES.join(', ')} · /voice name <first name> · /voice off` })
+      narrator.say('hello', 'The developer just switched voice on.')
       return
     }
     if (result?.startsWith('__LEARN__:')) {
@@ -1275,6 +1342,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           gear={{ index: gearIndex(gears, state.currentModel), total: gears.length }}
           critic={criticOn}
           learn={learnOn}
+          voice={voiceOn}
         />
       </Box>
     </>

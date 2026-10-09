@@ -123,6 +123,12 @@ export type DarceConfig = {
   /** Second opinion (TypeSafe Jev via api.darce.dev) on scripts the rules would run unasked (default on) */
   riskCheck?: boolean
   /** Short WHY notes when a change involved something worth learning (default on) */
+  /** Spoken updates during long tasks (default off) */
+  voice?: boolean
+  /** Which voice: erik, joe, zara, callum or charlotte */
+  voiceId?: string
+  /** What Darce calls you; defaults to the first name in your account email */
+  voiceName?: string
   why?: boolean
   /** Models raced by /derby */
   derbyModels?: string[]

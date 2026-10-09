@@ -1382,6 +1382,33 @@ async function testBrain() {
     return waits.length === 2 && waits[1]!.seconds === 7 && waits[1]!.hedged && ok.some(e => e.type === 'text_delta')
       && bad.some(e => e.type === 'error' && e.error.includes('Provider returned error'))
   })
+  await test('Voice: first names come from ordinary emails only', async () => {
+    const { firstNameFromEmail } = await import('./src/core/voice.js')
+    return firstNameFromEmail('amer.sarhan@gmail.com') === 'Amer' && firstNameFromEmail('JOHN_doe@x.io') === 'John' && firstNameFromEmail('xacom39771@airychen.com') === '' && firstNameFromEmail('a@b.c') === '' && firstNameFromEmail(undefined) === ''
+  })
+  await test('Voice: lines play in the background; extras are dropped, endings wait their turn', async () => {
+    const { createServer } = await import('node:http')
+    const { Narrator } = await import('./src/core/voice.js')
+    const asked: string[] = []
+    const server = createServer((req, res) => {
+      let b = ''; req.on('data', d => (b += d)); req.on('end', () => {
+        asked.push(JSON.parse(b).event)
+        setTimeout(() => { res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'X-Darce-Line': 'hi' }); res.end(Buffer.from([0xff, 0xfb])) }, 40)
+      })
+    })
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+    const port = (server.address() as { port: number }).port
+    const played: number[] = []
+    const n = new Narrator({ apiKey: 'k', apiBase: `http://127.0.0.1:${port}`, name: () => 'Amer', voice: () => 'erik', player: () => ({ cmd: 'sleep', args: () => { played.push(Date.now()); return ['0.3'] } }) })
+    const t0 = Date.now()
+    n.say('start', 'a')        // spoken
+    n.say('progress', 'b')     // dropped: already talking, and only worth saying in the moment
+    n.say('done', 'c')         // waits for the first line, then plays
+    const quick = Date.now() - t0 // say() must never block
+    await new Promise(r => setTimeout(r, 1200))
+    server.close()
+    return quick < 20 && asked.join(',') === 'start,done' && played.length === 2 && played[1]! - played[0]! >= 280
+  })
   await test('Web: bot walls are detected', () => looksBlocked(403, '') && looksBlocked(200, '<title>Just a moment...</title>') && !looksBlocked(200, '<h1>Docs</h1>'))
 }
 

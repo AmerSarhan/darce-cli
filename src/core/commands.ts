@@ -109,6 +109,12 @@ const COMMANDS: SlashCommand[] = [
     execute: (args) => `__LEARN__:${args.trim().toLowerCase()}`,
   },
   {
+    name: 'voice',
+    aliases: ['talk'],
+    description: 'Darce talks you through long tasks (ElevenLabs voice)',
+    execute: (args) => `__VOICE__:${args.trim()}`,
+  },
+  {
     name: 'community',
     aliases: ['discord'],
     description: 'Join the Darce Discord: help, feedback and releases',
@@ -211,7 +217,7 @@ export function executeCommand(input: string, context: CommandContext): string |
 /** Argument hints shown in the slash menu for commands that take input. */
 const ARG_HINTS: Record<string, string> = {
   model: '[search]', derby: '<task>', swarm: '<task>', threads: '[number]', critic: 'on|off', mode: 'auto|ask|plan|full', upgrade: 'builder|power',
-  memory: '[forget <text>]', account: '[switch <email>]', security: '[changes]', why: 'on|off', suggest: 'on|off',
+  memory: '[forget <text>]', account: '[switch <email>]', security: '[changes]', why: 'on|off', voice: 'on|off|erik|joe|zara|callum|charlotte|name <first name>', suggest: 'on|off',
 }
 
 export function listCommands(): Array<{ name: string; aliases: string[]; description: string; args?: string }> {

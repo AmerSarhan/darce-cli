@@ -40,6 +40,7 @@ The first run lets you try it straight away with 10 free requests, no account ne
 ## What else it does
 
 - **Threads.** The agent can hand research to sub-agents with their own context; several run in parallel. `/threads` shows what each one did.
+- **It can talk.** Turn on `/voice` and Darce speaks up during long tasks in a natural ElevenLabs voice: "Alright, digging into that flaky checkout test", "Before I push this, can I run the migration? It can't be undone.", "Fixed it, two tests were sharing a database connection." Quick tasks stay quiet, and nothing ever waits on audio.
 - **Images.** Generates icons, illustrations and hero images into your project, with transparent backgrounds when you ask (GPT Image by default; Gemini and Seedream on request).
 - **Resume.** `/resume` picks up any past conversation, in this folder or any other.
 - **Skills and memory.** Drop a `SKILL.md` into `.darce/skills/` to teach it your team's way of doing things; it remembers your preferences across sessions.
@@ -61,6 +62,7 @@ The first run lets you try it straight away with 10 free requests, no account ne
 | `/mode auto\|ask\|plan\|full` | Approval mode (Shift+Tab cycles) |
 | `/resume` | Continue a past conversation |
 | `/why on\|off` | WHY notes (on by default) |
+| `/voice on\|off` | Darce talks you through long tasks (voices: erik, joe, zara, callum, charlotte) |
 | `/critic on\|off [model]` | Second-opinion review of every edit |
 | `/security [changes]` | Security review of the project or your uncommitted changes |
 | `/memory [forget <text>]` | What Darce remembers about you and this project |
