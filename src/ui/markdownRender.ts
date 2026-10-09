@@ -118,6 +118,11 @@ function table(tok: Tokens.Table, width: number): string {
   return [line('┌', '┬', '┐'), row(header, true), line('├', '┼', '┤'), ...rows.map(r => row(r)), line('└', '┴', '┘')].join('\n')
 }
 
+/** A WHY that only says the change was simple teaches nothing; some models write one anyway. */
+export function isFillerWhy(body: string): boolean {
+  return /^\W*(this|it|that)\s+(is|was)\s+(just\s+|only\s+)?(a|an)?\s*(simple|straightforward|routine|basic|minor|trivial|standard|small|quick)\b/i.test(body.trim())
+}
+
 function block(tok: Token, width: number, indent = 0): string {
   const t = theme()
   switch (tok.type) {
@@ -131,6 +136,7 @@ function block(tok: Token, width: number, indent = 0): string {
       // "WHY: …" paragraphs get Darce's WHY tag, as on the website
       const why = /^\s*(?:\*\*|__)?WHY:?(?:\*\*|__)?:?\s+/.exec(p.raw)
       if (why) {
+        if (isFillerWhy(p.raw.slice(why[0].length))) return ''
         const t = theme()
         const tag = chalk.bgHex(t.accent).hex('#09090b').bold(' WHY ') + ' '
         const body = wrap(tag + inline(Lexer.lexInline(p.raw.slice(why[0].length).trim())), width, indent + 6)

@@ -312,8 +312,9 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     commit({ kind: 'user', id: newId(), text })
     // Notes about things the user did between turns (e.g. /undo) ride along with the next message
     const notes = notesRef.current.splice(0)
-    if (learnRef.current) notes.push(WHY_NOTE)
-    const textContent = (notes.length ? `${notes.map(n => `[Note from Darce: ${n}]`).join('\n')}\n\n${text}` : text) + attachments
+    // The WHY note goes after the request: models follow a trailing instruction far more reliably
+    const why = learnRef.current ? `\n\n[Note from Darce: ${WHY_NOTE}]` : ''
+    const textContent = (notes.length ? `${notes.map(n => `[Note from Darce: ${n}]`).join('\n')}\n\n${text}` : text) + attachments + why
     messagesRef.current = [...messagesRef.current, {
       role: 'user',
       content: images.length ? [{ type: 'text', text: textContent }, ...images] : textContent,

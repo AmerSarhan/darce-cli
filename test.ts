@@ -1352,6 +1352,11 @@ async function testBrain() {
     const msgs: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'what is this' }, { type: 'image', mediaType: 'image/png', data: 'A'.repeat(100000) }] }]
     return estimateMessagesTokens(msgs) < 2000
   })
+  await test('WHY: filler notes are dropped, real ones keep their tag', () => {
+    const filler = renderTerminalMarkdown('Renamed it.\n\nWHY: This is a straightforward rename for clarity.', 80)
+    const real = renderTerminalMarkdown('Fixed.\n\nWHY: forEach ignores the promises its callback returns, so nothing waits.', 80)
+    return !filler.includes('WHY') && filler.includes('Renamed it.') && real.includes('WHY') && real.includes('forEach ignores')
+  })
   await test('Web: bot walls are detected', () => looksBlocked(403, '') && looksBlocked(200, '<title>Just a moment...</title>') && !looksBlocked(200, '<h1>Docs</h1>'))
 }
 
