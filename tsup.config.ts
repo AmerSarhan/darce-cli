@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { build } from 'esbuild'
 import { defineConfig } from 'tsup'
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8')) as { version: string }
@@ -16,5 +17,11 @@ export default defineConfig({
   },
   banner: {
     js: '#!/usr/bin/env node'
+  },
+  // The brain view (/brain) is a small web page served from dist/brain
+  async onSuccess() {
+    mkdirSync('dist/brain', { recursive: true })
+    await build({ entryPoints: ['src/brain/web/app.ts'], bundle: true, minify: true, format: 'iife', target: 'es2020', outfile: 'dist/brain/app.js', logLevel: 'warning' })
+    copyFileSync('src/brain/web/index.html', 'dist/brain/index.html')
   },
 })

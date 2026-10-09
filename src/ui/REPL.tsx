@@ -61,6 +61,10 @@ import type { FileDiff } from '../utils/diff.js'
 import { saveGlobalSetting } from '../config/config.js'
 import { WHY_NOTE } from '../core/context.js'
 import { Narrator, firstNameFromEmail, findPlayer, VOICE_NAMES } from '../core/voice.js'
+import { brain } from '../brain/bus.js'
+import { startBrain, stopBrain } from '../brain/server.js'
+import { projectPath } from '../brain/graph.js'
+import { resolve as resolvePathAbs } from 'node:path'
 import { runThread, Mutex, type Thread } from '../core/threads.js'
 import type { SpawnRequest } from '../types.js'
 import { ThreadsPanel } from './ThreadsPanel.js'
@@ -228,6 +232,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     })
   }
   useEffect(() => () => narratorRef.current?.stop(), [])
+  if (narratorRef.current) narratorRef.current.onLine = line => brain.emit('voice', { line })
   learnRef.current = learnOn
   const lastEsc = useRef(0)
   const [tainted, setTainted] = useState(false)
@@ -362,6 +367,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const voiceContext = (extra = '') => [`User asked: "${text.slice(0, 300)}"`, did.length ? `Darce so far: ${did.slice(-8).join('; ')}` : '', extra].filter(Boolean).join('\n')
     const startVoice = voice ? setTimeout(() => { spoke.start = true; voice.say('start', voiceContext()) }, 6_000) : undefined
     let slowTool: ReturnType<typeof setTimeout> | undefined
+    const rel = (p: string) => projectPath(state.cwd, resolvePathAbs(state.cwd, p))
+    brain.emit('prompt', { text: text.slice(0, 2000), model: modelRef.current })
     let steps = 0
 
     // Streaming text: complete markdown blocks are frozen into the transcript,
@@ -385,6 +392,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     }
 
     const summaries = new Map<string, string>()
+    const lastInputs = new Map<string, Record<string, unknown>>()
     const approvals = new Map<string, string>()
     const startedAt = Date.now()
     setTitle('darce · working')
@@ -410,6 +418,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       if (autoOk) return { allow: true as const }
 
       if (Date.now() - startedAt > 10_000) notify('Darce needs approval', `${call.name} ${toolSummary(call.name, call.input)}`)
+      brain.emit('ask', { command: call.name === 'Bash' ? String(call.input.command ?? '') : `${call.name} ${toolSummary(call.name, call.input)}`, reason: risk.reason })
       voice?.say('ask', voiceContext(`Darce is waiting for approval to run: ${call.name === 'Bash' ? String(call.input.command ?? '') : `${call.name} ${toolSummary(call.name, call.input)}`} (${risk.reason})`))
       setActivity(null)
       return new Promise<{ allow: true; via?: string } | { allow: false; reason: string }>(resolveDecision => {
@@ -436,6 +445,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const beforeChange = (call: { id: string; name: string; input: Record<string, unknown> }) => {
       const paths = call.input.file_path ? [String(call.input.file_path)] : []
       checkpointsRef.current?.snapshot(`${call.name} ${toolSummary(call.name, call.input)}`, paths, call.id)
+      brain.emit('checkpoint')
     }
 
     // Threads started by the Agent tool: explore threads run side by side, work threads one at a time
@@ -492,6 +502,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             break
           }
           case 'text_delta':
+            brain.streamText(event.text)
             buffer += event.text
             setActivity(null)
             if (!flushTimer) flushTimer = setTimeout(() => flush(false), 40)
@@ -504,11 +515,16 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             flush(true)
             break
           case 'tool_executing': {
+            lastInputs.set(event.id, event.input)
             const summary = toolSummary(event.name, event.input)
             summaries.set(event.id, summary)
             if (event.via) approvals.set(event.id, event.via === 'trusted' ? 'always allowed' : event.via)
             setActivity({ label: `${event.name} ${summary}`.trim(), startedAt: Date.now() })
             did.push(`${event.name} ${summary}`.trim())
+            {
+              const fp = event.input.file_path ?? (event.name === 'Read' ? event.input.path : undefined)
+              brain.emit('tool_start', { id: event.id, name: event.name, path: typeof fp === 'string' ? rel(fp) : undefined, command: event.name === 'Bash' ? String(event.input.command ?? '') : undefined, detail: summary })
+            }
             if (voice && event.name === 'Bash' && !spoke.progress) {
               clearTimeout(slowTool)
               slowTool = setTimeout(() => { spoke.progress = true; voice.say('progress', voiceContext(`Running for a while now: ${String(event.input.command ?? '')}`)) }, 12_000)
@@ -517,6 +533,16 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           }
           case 'tool_result_ready': {
             clearTimeout(slowTool)
+            if (brain.active) {
+              const d = event.display?.kind === 'diff' ? event.display : null
+              // Search results name files: light them up on the map
+              let matches: string[] | undefined
+              if ((event.name === 'Grep' || event.name === 'Glob') && !event.isError) {
+                const base = String((lastInputs.get(event.id) as { path?: string } | undefined)?.path ?? '.')
+                matches = [...new Set(event.result.split('\n').map(l => l.split(':')[0]!.trim()).filter(Boolean).slice(0, 300).map(p => rel(resolvePathAbs(state.cwd, base, p))).filter(Boolean))]
+              }
+              brain.emit('tool_end', { id: event.id, name: event.name, ms: event.durationMs, error: !!event.isError, diff: d && !event.isError ? { path: rel(d.path), added: d.added, removed: d.removed, created: d.created } : undefined, matches, mayChangeFiles: event.name === 'Bash' })
+            }
             if (event.isError && event.name === 'Bash') did.push(`(that command failed: ${event.result.slice(0, 120)})`)
             // The plan is shown as a live checklist, not as a tool line
             if (event.display?.kind === 'plan') {
@@ -567,6 +593,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           case 'error':
             flush(true)
             commit({ kind: 'error', id: newId(), text: event.error })
+            brain.emit('error', { message: event.error.slice(0, 400) })
             if (voice && !spoke.error) { spoke.error = true; voice.say('error', voiceContext(`It stopped with this error: ${event.error.slice(0, 300)}`)) }
             break
         }
@@ -607,6 +634,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         commit({ kind: 'receipt', id: newId(), data: receipt })
       }
       clearTimeout(startVoice); clearTimeout(slowTool)
+      brain.emit('turn_end', { ms: took, cost: getTotalCost() - costBefore, stopped: controller.signal.aborted, files: (receipt.files ?? []).map(f => ({ path: rel(f.path), added: f.added, removed: f.removed })) })
       if (voice) {
         if (controller.signal.aborted) voice.stop()
         else if (!spoke.error && (spoke.start || took >= 15_000)) {
@@ -946,6 +974,26 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       commit({ kind: 'system', id: newId(), text: on
         ? `Next-step suggestions on: after each task, ${(state.config.suggestModel || DEFAULT_SUGGEST_MODEL).split('/').pop()} predicts what you'll ask next. Tab accepts. Each prediction is one small request.`
         : 'Next-step suggestions off.' })
+      return
+    }
+    if (result?.startsWith('__REDEEM__:')) {
+      void import('../auth/redeem.js').then(m => m.redeemCode(result.slice(11))).then(text => commit({ kind: 'system', id: newId(), text }))
+      return
+    }
+    if (result?.startsWith('__BRAIN__:')) {
+      if (result.slice(10).trim() === 'stop') { stopBrain(); commit({ kind: 'system', id: newId(), text: 'Brain view closed.' }); return }
+      const cps = checkpointsRef.current!
+      void startBrain({
+        cwd: state.cwd,
+        model: () => modelRef.current,
+        gitRoot: () => cps.gitRoot,
+        timeline: () => cps.list().map(c => ({ n: c.n, label: c.label, at: c.at })),
+        stepDiff: i => cps.stepDiff(i),
+        sessionDiff: () => cps.sessionDiff(),
+      }).then(url => {
+        openInBrowser(url)
+        commit({ kind: 'system', id: newId(), text: `Brain view: ${url}\nA live map of this project. Watch Darce read and change files as it works; the timeline at the bottom replays every step. It runs on this computer only. /brain stop closes it.` })
+      }).catch(err => commit({ kind: 'error', id: newId(), text: `Couldn't start the brain view: ${(err as Error).message}` }))
       return
     }
     if (result?.startsWith('__VOICE__:')) {

@@ -60,6 +60,10 @@ if (args[0] === 'login') {
     const key = await signupFlow(loadConfig().apiKey || undefined)
     process.exit(key ? 0 : 1)
   })().catch(err => { console.error(err.message); process.exit(1) })
+} else if (args[0] === 'redeem') {
+  const { redeemCode } = await import('../auth/redeem.js')
+  console.log(`\n  ${await redeemCode(args[1] ?? '')}\n`)
+  process.exit(0)
 } else if (args[0] === 'upgrade') {
   upgradeFlow().then(() => process.exit(0)).catch(err => { console.error(err.message); process.exit(1) })
 } else {

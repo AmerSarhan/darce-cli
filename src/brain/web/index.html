@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Darce · brain</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e8892b'/%3E%3Cpath d='M11 10l7 6-7 6' stroke='%2309090b' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #07070a; --panel: rgba(15, 15, 19, 0.74); --panel-solid: #101014; --line: rgba(255, 255, 255, 0.07);
+    --line-strong: rgba(255, 255, 255, 0.12); --text: #ececef; --muted: #9a9aa3; --faint: #5d5d66;
+    --orange: #e8892b; --orange-soft: rgba(232, 137, 43, 0.14); --green: #3ecf8e; --red: #f26d6d; --blue: #7c9cf0;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --feed-w: 380px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+  button:focus-visible, input:focus-visible { outline: 2px solid rgba(232, 137, 43, 0.6); outline-offset: 2px; }
+  canvas#map { position: fixed; inset: 0; width: 100vw; height: 100vh; cursor: grab; touch-action: none; }
+  canvas#map.dragging { cursor: grabbing; }
+  canvas#map.pointing { cursor: pointer; }
+
+  .glass { background: var(--panel); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    border: 1px solid var(--line); }
+
+  /* Top bar */
+  #top { position: fixed; top: 14px; left: 14px; right: calc(var(--feed-w) + 28px); height: 48px; border-radius: 14px;
+    display: flex; align-items: center; gap: 14px; padding: 0 10px 0 12px; z-index: 5; }
+  .mark { width: 24px; height: 24px; border-radius: 7px; background: var(--orange); display: grid; place-items: center; flex: none; }
+  .mark svg { width: 14px; height: 14px; }
+  #project { font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+  #status { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px 0 10px; border-radius: 99px;
+    background: rgba(255, 255, 255, 0.05); color: var(--muted); white-space: nowrap; transition: background .3s, color .3s; max-width: 340px; overflow: hidden; }
+  #status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; transition: background .3s; }
+  #status span:last-child { overflow: hidden; text-overflow: ellipsis; }
+  #status.busy { color: var(--text); }
+  #status.busy .dot { background: var(--orange); animation: breathe 1.2s ease-in-out infinite; }
+  #status.ask { background: var(--orange-soft); color: #ffc58a; }
+  #status.ask .dot { background: var(--orange); animation: breathe .6s ease-in-out infinite; }
+  @keyframes breathe { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+  #stats { margin-left: auto; display: flex; gap: 16px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #stats b { color: var(--muted); font-weight: 500; }
+  #find { width: 180px; height: 30px; border-radius: 9px; border: 1px solid var(--line); background: rgba(0,0,0,.25);
+    color: var(--text); padding: 0 10px; font: inherit; outline: none; transition: border-color .2s, width .25s; }
+  #find:focus { border-color: var(--line-strong); width: 240px; }
+  #find::placeholder { color: var(--faint); }
+
+  /* Activity feed */
+  #feed { position: fixed; top: 14px; right: 14px; bottom: 14px; width: var(--feed-w); border-radius: 16px; z-index: 5;
+    display: flex; flex-direction: column; overflow: hidden; }
+  #feed header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  #feed header h2 { margin: 0; font-size: 13px; font-weight: 600; }
+  #feed header .model { color: var(--faint); font-family: var(--mono); font-size: 11.5px; }
+  #items { flex: 1; overflow-y: auto; padding: 10px 10px 18px; scroll-behavior: smooth; }
+  #items::-webkit-scrollbar { width: 8px; } #items::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 8px; }
+  .it { animation: rise .35s cubic-bezier(.2, .9, .3, 1.2) both; margin: 2px 0; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+  .prompt { margin: 14px 2px 8px; padding: 11px 13px; border-radius: 12px; background: rgba(255,255,255,.055); border: 1px solid var(--line);
+    font-size: 13.5px; color: var(--text); }
+  .prompt::before { content: "You"; display: block; font-size: 11px; color: var(--faint); margin-bottom: 3px; }
+  .row { display: flex; gap: 9px; align-items: flex-start; padding: 5px 8px; border-radius: 9px; color: var(--muted); cursor: default; }
+  .row.link { cursor: pointer; } .row.link:hover { background: rgba(255,255,255,.04); color: var(--text); }
+  .row .ic { width: 16px; flex: none; text-align: center; color: var(--faint); font-family: var(--mono); font-size: 12px; line-height: 19px; }
+  .row .tx { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+  .row .tx code { font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .row .meta { color: var(--faint); font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .row.edit .ic { color: var(--orange); } .row.read .ic { color: #d6d6dc; } .row.run .ic { color: var(--blue); }
+  .row.fail .ic, .row.fail .meta { color: var(--red); } .row.ok .meta { color: var(--green); }
+  .row.pending .ic { animation: breathe 1s ease-in-out infinite; }
+  .add { color: var(--green); } .del { color: var(--red); }
+  .answer { margin: 6px 2px; padding: 10px 12px; border-radius: 12px; color: #d8d8de; white-space: pre-wrap; overflow-wrap: anywhere;
+    border-left: 2px solid rgba(232,137,43,.5); background: linear-gradient(90deg, rgba(232,137,43,.06), transparent 60%); max-height: 320px; overflow: hidden; position: relative; }
+  .answer.long::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: linear-gradient(transparent, var(--panel-solid)); }
+  .answer code, .answer pre { font-family: var(--mono); font-size: 12px; }
+  .voice { color: #ffd2a3; font-style: italic; }
+  .ask { margin: 8px 2px; padding: 10px 12px; border-radius: 12px; background: var(--orange-soft); border: 1px solid rgba(232,137,43,.35); color: #ffd2a3; }
+  .ask code { font-family: var(--mono); font-size: 12px; color: #fff; display: block; margin-top: 4px; overflow-wrap: anywhere; }
+  .receipt { margin: 8px 2px 4px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 12.5px; }
+  .receipt dt { color: var(--faint); } .receipt dd { margin: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .error { color: var(--red); }
+  .empty { color: var(--faint); padding: 28px 16px; text-align: center; line-height: 1.7; }
+
+  /* Timeline */
+  #timeline { position: fixed; left: 14px; right: calc(var(--feed-w) + 28px); bottom: 14px; height: 54px; border-radius: 14px; z-index: 5;
+    display: flex; align-items: center; gap: 12px; padding: 0 12px 0 14px; }
+  #timeline .label { color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #ticks { flex: 1; height: 100%; display: flex; align-items: center; gap: 3px; overflow-x: auto; scrollbar-width: none; padding: 0 4px; }
+  #ticks::-webkit-scrollbar { display: none; }
+  .tick { flex: none; width: 10px; height: 26px; border-radius: 4px; position: relative; }
+  .tick::after { content: ""; position: absolute; left: 3px; right: 3px; top: 4px; bottom: 4px; border-radius: 3px; background: rgba(255,255,255,.16); transition: background .2s, top .2s, bottom .2s; }
+  .tick.bash::after { background: rgba(124,156,240,.45); }
+  .tick:hover::after { background: rgba(255,255,255,.5); top: 1px; bottom: 1px; }
+  .tick.on::after { background: var(--orange); top: 0; bottom: 0; }
+  .tick.new { animation: pop .5s cubic-bezier(.2, .9, .3, 1.4) both; }
+  @keyframes pop { from { transform: scaleY(0); } }
+  #live { height: 28px; padding: 0 11px; border-radius: 8px; color: var(--muted); border: 1px solid var(--line); display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+  #live .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+  #live.on { color: var(--text); } #live.on .dot { background: var(--orange); box-shadow: 0 0 10px var(--orange); }
+
+  /* Drawer */
+  #drawer { position: fixed; top: 14px; bottom: 14px; right: 14px; width: min(620px, calc(100vw - 28px)); border-radius: 16px; z-index: 8;
+    display: flex; flex-direction: column; transform: translateX(calc(100% + 30px)); transition: transform .45s cubic-bezier(.2, .9, .2, 1); background: rgba(13,13,17,.94); }
+  #drawer.open { transform: none; }
+  #drawer header { display: flex; align-items: center; gap: 10px; padding: 14px 14px 12px 18px; border-bottom: 1px solid var(--line); }
+  #drawer header h3 { margin: 0; font: 600 13px var(--mono); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #drawer header .sub { color: var(--faint); font-size: 12px; white-space: nowrap; }
+  #drawer .close { width: 30px; height: 30px; border-radius: 8px; color: var(--muted); display: grid; place-items: center; }
+  #drawer .close:hover { background: rgba(255,255,255,.06); color: var(--text); }
+  #dbody { flex: 1; overflow: auto; padding: 6px 0 20px; font: 12px/1.6 var(--mono); }
+  .ftitle { position: sticky; top: 0; padding: 10px 18px 6px; background: rgba(13,13,17,.97); color: var(--text); font-weight: 600; display: flex; gap: 10px; z-index: 1; }
+  .ftitle .meta { color: var(--faint); font-weight: 400; }
+  .ln { display: grid; grid-template-columns: 44px 1fr; white-space: pre; padding-right: 16px; }
+  .ln .n { color: var(--faint); text-align: right; padding-right: 12px; user-select: none; }
+  .ln.a { background: rgba(62,207,142,.09); } .ln.a .c { color: #a6f0cb; }
+  .ln.d { background: rgba(242,109,109,.09); } .ln.d .c { color: #ffb4b4; }
+  .ln .c { min-width: 0; }
+  .ln.a { animation: slidein .5s cubic-bezier(.2, .9, .3, 1) both; }
+  @keyframes slidein { from { opacity: 0; transform: translateX(-6px); } }
+  .gap { color: var(--faint); padding: 4px 18px; }
+  .hidden-note { color: var(--muted); padding: 24px 18px; font-family: inherit; }
+
+  /* Tooltip, intro, hints */
+  #tip { position: fixed; z-index: 9; pointer-events: none; padding: 8px 10px; border-radius: 10px; font-size: 12px; opacity: 0;
+    transform: translateY(4px); transition: opacity .12s, transform .12s; max-width: 340px; background: rgba(16,16,20,.92); border: 1px solid var(--line-strong); }
+  #tip.on { opacity: 1; transform: none; }
+  #tip .p { font-family: var(--mono); color: var(--text); overflow-wrap: anywhere; }
+  #tip .s { color: var(--faint); margin-top: 2px; }
+  #intro { position: fixed; left: 28px; bottom: 112px; z-index: 4; pointer-events: none; transition: opacity .8s, transform .8s; max-width: 420px; }
+  #intro.gone { opacity: 0; transform: translateY(6px); }
+  #intro div { color: var(--muted); }
+  #intro h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; letter-spacing: -0.025em; color: var(--text); }
+  #hints { position: fixed; left: 28px; bottom: 82px; color: var(--faint); font-size: 11.5px; z-index: 4; display: flex; gap: 14px; }
+  #hints kbd { font-family: var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; margin-right: 4px; }
+  #banner { position: fixed; top: 74px; left: 50%; transform: translateX(-50%) translateY(-10px); z-index: 9; padding: 8px 14px; border-radius: 10px; opacity: 0; transition: .3s; color: #ffd2a3; pointer-events: none; }
+  #banner.on { opacity: 1; transform: translateX(-50%); }
+
+  @media (max-width: 960px) {
+    :root { --feed-w: 0px; }
+    #feed { top: auto; height: 38vh; left: 14px; width: auto; }
+    #top { right: 14px; } #stats, #find { display: none; }
+    #timeline { right: 14px; bottom: calc(38vh + 24px); }
+    #hints { display: none; }
+    #intro { right: 0; bottom: 38vh; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<canvas id="map" aria-label="Map of the codebase"></canvas>
+
+<div id="top" class="glass">
+  <div class="mark" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5 4l5 4-5 4" stroke="#09090b" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <div id="project">darce</div>
+  <div id="status"><span class="dot"></span><span>Connecting</span></div>
+  <div id="stats"><span><b id="s-files">0</b> files</span><span><b id="s-changed">0</b> changed</span><span><b id="s-steps">0</b> steps</span></div>
+  <input id="find" placeholder="Find a file" autocomplete="off" spellcheck="false" aria-label="Find a file">
+</div>
+
+<aside id="feed" class="glass" aria-label="What Darce is doing">
+  <header><h2>Live</h2><span class="model" id="model"></span></header>
+  <div id="items"><div class="empty" id="empty">Nothing yet.<br>Ask Darce something in your terminal and watch it work here.</div></div>
+</aside>
+
+<footer id="timeline" class="glass">
+  <span class="label" id="tl-label">No steps yet</span>
+  <div id="ticks" role="listbox" aria-label="Steps this session"></div>
+  <button id="live" class="on" title="Back to live (Esc)"><span class="dot"></span>Live</button>
+</footer>
+
+<section id="drawer" class="glass" aria-label="Details">
+  <header><h3 id="d-title"></h3><span class="sub" id="d-sub"></span><button class="close" id="d-close" aria-label="Close">✕</button></header>
+  <div id="dbody"></div>
+</section>
+
+<div id="intro"><div><h1 id="intro-title">Mapping your codebase…</h1><div id="intro-sub">Each dot is a file, grouped by folder.</div></div></div>
+<div id="hints"><span><kbd>scroll</kbd>zoom</span><span><kbd>drag</kbd>move</span><span><kbd>F</kbd>follow Darce</span><span><kbd>0</kbd>fit</span></div>
+<div id="tip"></div>
+<div id="banner" class="glass"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

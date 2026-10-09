@@ -2,6 +2,11 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.13.0
+
+- **Brain view.** `/brain` opens a live map of your project in the browser: every file a dot, grouped by folder, wired by its imports. Watch Darce's attention move across it: reads glow, edits pulse orange and send a signal to every file that depends on the change. The feed shows each step as it happens, and the timeline replays the session step by step with diffs. Runs on your computer only.
+- **Early-beta codes.** `darce redeem <CODE>` (or `/redeem`) turns on Power for 60 days.
+
 ## 0.12.11
 
 - **Derby you can steer.** While models race, press 1-3 or ↑↓ to read any finished one, and Enter to take it right away (the rest stop). Questions work too: if the winner changed no files, its answer becomes Darce's reply, shown in full on the board. The prompt line no longer claims you can type while the board has the keys.

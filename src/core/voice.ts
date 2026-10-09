@@ -52,6 +52,8 @@ export class Narrator {
   private lastSpokeAt = 0
   private generation = 0
   onLimit?: (message: string) => void
+  /** Called with each line as it starts playing (the brain view shows it) */
+  onLine?: (line: string) => void
 
   constructor(private opts: { apiKey: string; apiBase: string; name: () => string; voice: () => string; player?: () => Player | null }) {}
 
@@ -98,6 +100,7 @@ export class Narrator {
       writeFileSync(file, audio)
       trace('voice', { event, ms: Date.now() - t0, line: decodeURIComponent(res.headers.get('x-darce-line') ?? '') })
       this.fetching = false
+      this.onLine?.(decodeURIComponent(res.headers.get('x-darce-line') ?? ''))
       this.play(p, file)
     } catch (err) {
       trace('voice', { event, error: (err as Error).message })
