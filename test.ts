@@ -1409,6 +1409,17 @@ async function testBrain() {
     server.close()
     return quick < 20 && asked.join(',') === 'start,done' && played.length === 2 && played[1]! - played[0]! >= 280
   })
+  await test('Files: a folder of many projects lists fast without blocking (node_modules at any depth skipped)', async () => {
+    const { walk } = await import('./src/utils/walk.js')
+    const root = join(TMP_DIR, 'workspace')
+    for (const p of ['app-a', 'app-b']) {
+      mkdirSync(join(root, p, 'src'), { recursive: true }); writeFileSync(join(root, p, 'src', 'index.ts'), 'x')
+      mkdirSync(join(root, p, 'node_modules', 'dep'), { recursive: true }); writeFileSync(join(root, p, 'node_modules', 'dep', 'index.js'), 'x')
+    }
+    const { files } = await walk(root, '**/*', { max: 100, budgetMs: 2000 })
+    const capped = await walk(root, '**/*', { max: 1, budgetMs: 2000 })
+    return files.length === 2 && files.every(f => !f.includes('node_modules')) && capped.truncated && capped.files.length === 1
+  })
   await test('Web: bot walls are detected', () => looksBlocked(403, '') && looksBlocked(200, '<title>Just a moment...</title>') && !looksBlocked(200, '<h1>Docs</h1>'))
 }
 

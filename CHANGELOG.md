@@ -2,6 +2,10 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.12.10
+
+- **No freeze in big folders.** Starting Darce in a folder that holds many projects (each with its own node_modules) could pin the CPU and freeze the screen while it listed files for @mentions. File listing now uses git where it can, skips dependency folders at any depth, and stops early; a 100-project folder lists in under 0.2s. Broad Glob searches outside a repository stop early too.
+
 ## 0.12.9
 
 - **Darce can talk.** `/voice on` and Darce gives you short spoken updates during long tasks, when it needs your approval, and when it's done, in a natural ElevenLabs v4 voice. Pick a voice with `/voice erik|joe|zara|callum|charlotte`, set your name with `/voice name <first name>`. Audio plays in the background, so tasks never wait on it. Paid plans get plenty of lines each month; free plans get a taste.

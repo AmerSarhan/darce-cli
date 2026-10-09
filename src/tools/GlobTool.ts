@@ -2,9 +2,7 @@ import { z } from 'zod'
 import { globby } from 'globby'
 import { resolve, join } from 'node:path'
 import { existsSync } from 'node:fs'
-
-// Dependency and build folders at any depth (a workspace often holds many projects)
-const DEEP_IGNORE = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/.next/**', '**/build/**', '**/.venv/**', '**/venv/**', '**/__pycache__/**', '**/target/**', '**/.turbo/**', '**/coverage/**', '**/.cache/**']
+import { DEEP_IGNORE, walk } from '../utils/walk.js'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
 
@@ -25,11 +23,19 @@ export const GlobTool: ToolDef<typeof inputSchema, string[]> = {
   async call(input: Input, context: ToolContext): Promise<ToolResult<string[]>> {
     const searchDir = input.path ? resolve(context.cwd, input.path) : context.cwd
     try {
-      // Reading every .gitignore is slow in a folder full of projects; only do it inside one repository
+      // Inside one repository, honour its .gitignore. Anywhere else (a folder full of projects) stream the
+      // walk and stop early, so a broad pattern can't keep the CPU busy after the answer is in
       const inRepo = existsSync(join(searchDir, '.git'))
+      if (!inRepo) {
+        const { files, truncated } = await walk(searchDir, input.pattern, { max: 500, budgetMs: 10_000 })
+        if (truncated && files.length < 500) {
+          return { data: [`Search took over 10s in ${input.path ?? 'this folder'}. Use a narrower path or pattern, e.g. path: "my-app/src".`], isError: true }
+        }
+        return { data: files }
+      }
       const search = globby(input.pattern, {
         cwd: searchDir,
-        gitignore: inRepo,
+        gitignore: true,
         ignore: DEEP_IGNORE,
         absolute: false,
         followSymbolicLinks: false,
