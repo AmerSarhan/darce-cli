@@ -396,7 +396,8 @@ function onEvent(e: Ev) {
       break
     case 'tool_start': {
       ensureTurn()
-      if (replyEl) { replyEl = null; replyText = ''; newSteps() }
+      // Text before a step is narration ("Now I'll…"): keep it, quietly
+      if (replyEl) { replyEl.classList.add('aside'); replyEl.querySelector('.who')?.remove(); replyEl = null; replyText = ''; newSteps() }
       const t = toolOf(String(e.name))
       const path = typeof e.path === 'string' && e.path ? e.path : null
       const li = h('li', `step running ${t.kind}${path ? ' link' : ''}`, `${icon(t.icon)}<span class="tx">${stepLabel(e, t, false)}</span><span class="meta"></span>`)

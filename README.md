@@ -33,6 +33,14 @@ The first run lets you try it straight away with 10 free requests, no account ne
 - **250+ coding models.** Claude, GPT, Gemini, Qwen, DeepSeek, Kimi, GLM, Grok and more, live from OpenRouter, filtered to models that can actually drive an agent. Switch mid-task with Shift+↑/↓.
 - **It tells you why.** When a fix hinges on something you can't see in the code (a language quirk, a React rule, async ordering, SQL injection), Darce ends with a short WHY note so you spot it next time. Routine edits get none.
 
+## See what it's touching
+
+`/brain` opens a live view of your project in the browser. The file Darce is working on sits in the middle, with what it imports on the left and what imports it on the right. When Darce changes a file, everything that depends on it lights up, so you can see the reach of each edit as it happens. The activity column lists every step, and the code panel shows the exact diff. It runs on your machine only.
+
+<p align="center">
+  <img src="assets/demo-brain.gif" width="880" alt="/brain while Darce renames a function across five files: each file it edits opens in the middle with its imports on the left and its dependents highlighted on the right, the diff below, and every step listed in the activity column">
+</p>
+
 <p align="center">
   <img src="assets/demo-swarm.gif" width="880" alt="/swarm splits a task into three threads that run in parallel in their own worktrees, then merges them; 17 tests pass">
 </p>

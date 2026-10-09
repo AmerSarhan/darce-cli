@@ -2,6 +2,10 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.13.1
+
+- **Brain view polish.** Search steps show project paths instead of full system paths, and Darce's short "Now I'll…" narration between steps is shown as a quiet aside so the steps stay easy to follow.
+
 ## 0.13.0
 
 - **Brain view.** `/brain` opens a live map of your project in the browser: every file a dot, grouped by folder, wired by its imports. Watch Darce's attention move across it: reads glow, edits pulse orange and send a signal to every file that depends on the change. The feed shows each step as it happens, and the timeline replays the session step by step with diffs. Runs on your computer only.

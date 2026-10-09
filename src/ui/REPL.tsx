@@ -523,7 +523,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             did.push(`${event.name} ${summary}`.trim())
             {
               const fp = event.input.file_path ?? (event.name === 'Read' ? event.input.path : undefined)
-              brain.emit('tool_start', { id: event.id, name: event.name, path: typeof fp === 'string' ? rel(fp) : undefined, command: event.name === 'Bash' ? String(event.input.command ?? '') : undefined, detail: summary })
+              brain.emit('tool_start', { id: event.id, name: event.name, path: typeof fp === 'string' ? rel(fp) : undefined, command: event.name === 'Bash' ? String(event.input.command ?? '') : undefined, detail: summary.split(state.cwd + '/').join('').split(state.cwd).join('.') })
             }
             if (voice && event.name === 'Bash' && !spoke.progress) {
               clearTimeout(slowTool)

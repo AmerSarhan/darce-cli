@@ -1,6 +1,6 @@
 {
   "name": "darce-cli",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "The coding agent you can undo: 250+ models in your terminal, parallel swarms, model racing, and /undo for everything, even shell commands.",
   "type": "module",
   "bin": {
