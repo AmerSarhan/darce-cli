@@ -105,7 +105,7 @@ export class OpenRouterProvider implements Provider {
    * A stall before any output is retried once; a stall mid-answer is reported instead of hanging.
    */
   async *stream(messages: Message[], model: string, tools: OpenRouterTool[], signal?: AbortSignal): AsyncGenerator<StreamEvent> {
-    const STALL_MS = Number(process.env.DARCE_STALL_MS) || 90_000
+    const STALL_MS = Number(process.env.DARCE_STALL_MS) || 45_000
     for (let attempt = 0; attempt < 2; attempt++) {
       const stall = new AbortController()
       const forward = () => stall.abort()
@@ -119,7 +119,7 @@ export class OpenRouterProvider implements Provider {
       try {
         for await (const ev of this.streamOnce(messages, model, tools, stall.signal, arm)) {
           if (ev.type === 'error') trace('error', { model, error: ev.error.slice(0, 200) })
-          if (ev.type !== 'request_start') produced = true
+          if (ev.type !== 'request_start' && ev.type !== 'waiting') produced = true
           yield ev
         }
       } finally {
@@ -238,6 +238,11 @@ export class OpenRouterProvider implements Provider {
 
         const text = decoder.decode(value, { stream: true })
         keepalives += text.split('OPENROUTER PROCESSING').length - 1
+        // The server says how long it has been waiting for a provider to start
+        const wait = /: darce waiting (\d+)s( hedged)?/g
+        let w: RegExpExecArray | null, lastWait: RegExpExecArray | null = null
+        while ((w = wait.exec(text))) lastWait = w
+        if (lastWait && !firstToken) yield { type: 'waiting', seconds: Number(lastWait[1]), hedged: !!lastWait[2] }
         buffer += text
         const { frames, remaining } = parseSSEFrames(buffer)
         buffer = remaining
@@ -289,7 +294,11 @@ export class OpenRouterProvider implements Provider {
             firstToken = true
             trace('first_token', { model, ms: since(), keepalives })
           }
-          if (chunk.error) trace('upstream_error', { model, ms: since(), error: String(chunk.error?.message ?? chunk.error).slice(0, 200) })
+          if (chunk.error) {
+            const message = String(chunk.error?.message ?? chunk.error)
+            trace('upstream_error', { model, ms: since(), error: message.slice(0, 200) })
+            if (!fullContent && activeToolCalls.size === 0) { yield { type: 'error', error: `${model.split('/').pop()}: ${message}` }; return }
+          }
 
           // Extract usage if present
           if (chunk.usage) {

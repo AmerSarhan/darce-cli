@@ -51,7 +51,7 @@ import { remember, readMemory, forget } from './src/core/memory.js'
 import { listCommands } from './src/core/commands.js'
 import { renderTerminalMarkdown } from './src/ui/markdownRender.js'
 import { buildSystemPrompt, resetContext } from './src/core/context.js'
-import type { ToolContext, Message, RouterConfig } from './src/types.js'
+import type { ToolContext, Message, RouterConfig, StreamEvent } from './src/types.js'
 import { isCodingModel } from './src/config/models.js'
 import { wantsSecondOpinion } from './src/core/riskcheck.js'
 
@@ -1356,6 +1356,31 @@ async function testBrain() {
     const filler = renderTerminalMarkdown('Renamed it.\n\nWHY: This is a straightforward rename for clarity.', 80)
     const real = renderTerminalMarkdown('Fixed.\n\nWHY: forEach ignores the promises its callback returns, so nothing waits.', 80)
     return !filler.includes('WHY') && filler.includes('Renamed it.') && real.includes('WHY') && real.includes('forEach ignores')
+  })
+  await test('Stream: server waiting pings become waiting events, then the answer streams', async () => {
+    const { createServer } = await import('node:http')
+    const { OpenRouterProvider } = await import('./src/providers/openrouter.js')
+    const server = createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      res.write(': darce waiting 3s\n\n')
+      setTimeout(() => res.write(': darce waiting 7s hedged\n\n'), 30)
+      setTimeout(() => {
+        const failing = (globalThis as any).__failStream
+        res.end(failing
+          ? 'data: {"error":{"message":"Provider returned error","code":502}}\n\ndata: [DONE]\n\n'
+          : 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+      }, 60)
+    })
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+    const port = (server.address() as { port: number }).port
+    const collect = async () => { const out: StreamEvent[] = []; for await (const e of new OpenRouterProvider('k', `http://127.0.0.1:${port}`).stream([{ role: 'user', content: 'x' }], 'qwen/qwen3-coder', [])) out.push(e); return out }
+    const ok = await collect()
+    ;(globalThis as any).__failStream = true
+    const bad = await collect()
+    server.close()
+    const waits = ok.filter(e => e.type === 'waiting') as Extract<StreamEvent, { type: 'waiting' }>[]
+    return waits.length === 2 && waits[1]!.seconds === 7 && waits[1]!.hedged && ok.some(e => e.type === 'text_delta')
+      && bad.some(e => e.type === 'error' && e.error.includes('Provider returned error'))
   })
   await test('Web: bot walls are detected', () => looksBlocked(403, '') && looksBlocked(200, '<title>Just a moment...</title>') && !looksBlocked(200, '<h1>Docs</h1>'))
 }

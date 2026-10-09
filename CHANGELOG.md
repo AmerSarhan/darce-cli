@@ -2,6 +2,11 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.12.9
+
+- **No more silent waits.** When a model's provider is slow to start, Darce now says so ("Waiting for qwen3-coder · trying a faster provider") while the server races a second, faster provider and keeps whichever answers first. Provider errors that arrive mid-stream are shown instead of ending the turn silently, and a truly stuck request gives up after 45s instead of 90s.
+- **Faster launch.** Compiled code is cached on disk, so Darce starts quicker after the first run.
+
 ## 0.12.8
 
 - **Better images.** Images now come from OpenAI's GPT Image 2.5 by default on every plan: sharper, great with text, and it can make transparent backgrounds for icons and logos. A default image counts as 2 requests. Google's Nano Banana 2 and Pro (paid plans) and Seedream are available too.

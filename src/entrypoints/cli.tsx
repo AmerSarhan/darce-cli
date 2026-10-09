@@ -1,5 +1,9 @@
 // Fast paths — no heavy imports
+import { enableCompileCache } from 'node:module'
 import { VERSION } from '../version.js'
+
+// Cache compiled code on disk (Node 22.1+): later launches skip recompiling Ink, React and Darce
+try { enableCompileCache?.() } catch { /* older Node or read-only cache dir: just slower */ }
 
 const args = process.argv.slice(2)
 

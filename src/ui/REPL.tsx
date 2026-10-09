@@ -460,6 +460,12 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             committedUpTo = 0
             setActivity({ label: 'Thinking', startedAt: Date.now() })
             break
+          case 'waiting': {
+            // Keep the timer running from when we asked; just say what's happening
+            const name = modelRef.current.split('/').pop()
+            setActivity(a => ({ label: event.hedged ? `Waiting for ${name} · trying a faster provider` : `Waiting for ${name} to start`, startedAt: a?.startedAt ?? Date.now() }))
+            break
+          }
           case 'text_delta':
             buffer += event.text
             setActivity(null)

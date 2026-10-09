@@ -41,6 +41,8 @@ export type Message = {
 
 export type StreamEvent =
   | { type: 'request_start'; model?: string }
+  /** The provider hasn't started yet; the server is waiting (and may have asked a faster provider) */
+  | { type: 'waiting'; seconds: number; hedged: boolean }
   | { type: 'text_delta'; text: string }
   | { type: 'tool_use_start'; id: string; name: string }
   | { type: 'tool_use_delta'; id: string; json: string }
