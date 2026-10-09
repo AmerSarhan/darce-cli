@@ -220,7 +220,7 @@ async function signIn(p: ReturnType<typeof createPrompter>, presetEmail?: string
       return null
     }
     console.log(result.status === 401
-      ? '  Wrong email or password. Try again.\n'
+      ? '  Wrong email or password. Try again, or reset it at https://cli.darce.dev/forgot\n'
       : `  ${result.message}\n`)
   }
   console.log('  Still stuck? Run `darce login` to try again.\n')
