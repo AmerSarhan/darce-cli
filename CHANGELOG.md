@@ -2,6 +2,13 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.14.0
+
+- **Usage instead of request counts.** Plans now have an allowance measured by what your model calls actually cost: Free resets every day, Builder and Power every week. Fast models stretch it much further, so a free account gets real daily use. The welcome card and `/account` show how much you've used and when it resets, and Darce stops retrying once it's used up.
+- **Claude Haiku 5.5 is the default.** Fast, capable and the cheapest strong model, so your allowance goes furthest. It's also on the Shift+↑/↓ gear list. Your own `/model` choice is kept.
+- **The free plan is called Free** everywhere, and the trial and sign-up screens describe the daily allowance.
+- **Quieter WHY notes** on short answers, and shorter paths in the welcome card.
+
 ## 0.13.1
 
 - **Brain view polish.** Search steps show project paths instead of full system paths, and Darce's short "Now I'll…" narration between steps is shown as a quiet aside so the steps stay easy to follow.
