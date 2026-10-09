@@ -59,7 +59,7 @@ import type { ImageContent } from '../types.js'
 import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
 import type { FileDiff } from '../utils/diff.js'
 import { saveGlobalSetting } from '../config/config.js'
-import { WHY_NOTE } from '../core/context.js'
+import { WHY_NOTE, wantsWhy } from '../core/context.js'
 import { Narrator, firstNameFromEmail, findPlayer, VOICE_NAMES } from '../core/voice.js'
 import { brain } from '../brain/bus.js'
 import { startBrain, stopBrain } from '../brain/server.js'
@@ -262,7 +262,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const timer = setTimeout(finish, 1200)
     fetchAccount(state.config.apiKey, state.config.apiBase || undefined).then(info => {
       if (info) {
-        const plan = info.tier === 'free' ? 'Starter' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
+        const plan = info.tier === 'free' ? 'Free' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
         const left = typeof info.daily_limit === 'number' ? ` · ${Math.max(0, info.daily_limit - info.daily_requests).toLocaleString()} of ${info.daily_limit.toLocaleString()} requests left` : ' · unlimited'
         // DARCE_DEMO=1 keeps your email out of screen recordings
         if (info.tier === 'trial') accountLine.current = `trial${left} · \`darce signup\` keeps going for free`
@@ -334,7 +334,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     // Notes about things the user did between turns (e.g. /undo) ride along with the next message
     const notes = notesRef.current.splice(0)
     // The WHY note goes after the request: models follow a trailing instruction far more reliably
-    const why = learnRef.current ? `\n\n[Note from Darce: ${WHY_NOTE}]` : ''
+    // WHY notes belong to problems (a bug, an error, a surprise), not overviews or routine requests
+    const why = learnRef.current && wantsWhy(text) ? `\n\n[Note from Darce: ${WHY_NOTE}]` : ''
     const textContent = (notes.length ? `${notes.map(n => `[Note from Darce: ${n}]`).join('\n')}\n\n${text}` : text) + attachments + why
     messagesRef.current = [...messagesRef.current, {
       role: 'user',
@@ -886,7 +887,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       const info = await fetchAccount(apiKey, apiBase)
       if (!info) return ''
       const limit = typeof info.daily_limit === 'string' ? 'unlimited' : `${info.daily_requests}/${info.daily_limit} requests used`
-      const plan = info.tier === 'free' ? 'Starter (free)' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
+      const plan = info.tier === 'free' ? 'Free' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
       return `${plan} plan · ${limit}`
     }
     if (result === '__LOGIN__') {

@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import React, { useEffect } from 'react'
 import { Box, Text, useAnimation } from 'ink'
 import { theme } from './theme.js'
@@ -77,7 +78,7 @@ export function Welcome({ info }: { info: WelcomeInfo }) {
         <Text>
           <Text color={t.faint}>model </Text><Text>{info.model.split('/').pop()}</Text>
           <Text color={t.faint}>   mode </Text><Text>{info.mode}</Text>
-          <Text color={t.faint}>   in </Text><Text>{info.cwd}</Text>
+          <Text color={t.faint}>   in </Text><Text>{shortPath(info.cwd)}</Text>
         </Text>
         {info.account ? <Text><Text color={t.faint}>you   </Text><Text>{info.account}</Text></Text> : null}
       </Box>
@@ -91,4 +92,13 @@ export function Welcome({ info }: { info: WelcomeInfo }) {
       <Text color={t.faint}>community  <Text color={t.muted}>{webLink(DISCORD_URL.replace('https://', ''), DISCORD_URL)}</Text>  or /community</Text>
     </Box>
   )
+}
+
+/** ~/projects/app instead of /Users/name/projects/app, and only the last few folders of a deep path. */
+export function shortPath(p: string): string {
+  const home = homedir()
+  let s = p.startsWith(home) ? '~' + p.slice(home.length) : p
+  const parts = s.split('/')
+  if (s.length > 48 && parts.length > 4) s = `${parts[0] || ''}/…/${parts.slice(-2).join('/')}`
+  return s
 }

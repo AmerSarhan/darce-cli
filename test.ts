@@ -1421,6 +1421,11 @@ async function testBrain() {
     const capped = await walk(root, '**/*', { max: 1, budgetMs: 2000 })
     return files.length === 2 && files.every(f => !f.includes('node_modules')) && capped.truncated && capped.files.length === 1
   })
+  await test('WHY: only offered for problems, not overviews or routine work', async () => {
+    const { wantsWhy } = await import('./src/core/context.js')
+    return wantsWhy('the checkout test fails randomly, fix it') && wantsWhy('why does this return undefined?') && wantsWhy('make this query safe from SQL injection')
+      && !wantsWhy('what does this project do?') && !wantsWhy('add a phone field to the user form') && !wantsWhy('rename x to total')
+  })
   await test('Web: bot walls are detected', () => looksBlocked(403, '') && looksBlocked(200, '<title>Just a moment...</title>') && !looksBlocked(200, '<h1>Docs</h1>'))
 }
 

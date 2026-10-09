@@ -127,7 +127,7 @@ export async function signupFlow(currentKey?: string): Promise<string | null> {
       const data = await res.json().catch(() => ({})) as { api_key?: string; message?: string }
       if (res.ok && data.api_key) {
         saveCredentials(data.api_key, email)
-        console.log(`  Done: ${email} is on the free Starter plan. Carry on with \`darce --resume\`.\n`)
+        console.log(`  Done: ${email} is on the Free plan. Carry on with \`darce --resume\`.\n`)
         return data.api_key
       }
       console.log(`  ${data.message || `Sign-up failed (${res.status}).`}\n`)
@@ -184,7 +184,7 @@ async function signUp(p: ReturnType<typeof createPrompter>): Promise<string | { 
     console.log('\n  Creating your account...')
     const result = await callAuth('register', email, password)
     if (result.ok) {
-      console.log('  Account created — you\'re on the free Starter plan.\n')
+      console.log('  Account created — you\'re on the Free plan.\n')
       return result.apiKey
     }
     if (result.status === 409 || /exist|already|taken|registered/i.test(result.message)) {
