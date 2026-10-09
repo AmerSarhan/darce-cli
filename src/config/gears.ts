@@ -3,6 +3,7 @@ import { getModelProfile } from './models.js'
 // Cheapest → smartest. Shift+↑ / Shift+↓ moves along this list, even mid-task.
 export const DEFAULT_GEARS = [
   'qwen/qwen3-coder-next',
+  'anthropic/claude-haiku-5.5',
   'qwen/qwen3-coder',
   'deepseek/deepseek-v4-pro',
   'anthropic/claude-sonnet-5.5',

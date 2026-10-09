@@ -43,7 +43,7 @@ import { DEFAULT_GEARS, gearIndex, shiftGear, priceNote } from '../config/gears.
 import { createCheckout, openInBrowser } from '../core/billing.js'
 import { DISCORD_URL } from '../community.js'
 import { readMemory, memoryPath, forget } from '../core/memory.js'
-import { listAccounts, addAccount, switchAccount, removeAccount, fetchAccount } from '../auth/accounts.js'
+import { listAccounts, addAccount, switchAccount, removeAccount, fetchAccount, describeUsage } from '../auth/accounts.js'
 import { browserLogin } from '../auth/browserLogin.js'
 import { discoverSkills } from '../core/skills.js'
 import { resetContext } from '../core/context.js'
@@ -263,7 +263,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     fetchAccount(state.config.apiKey, state.config.apiBase || undefined).then(info => {
       if (info) {
         const plan = info.tier === 'free' ? 'Free' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
-        const left = typeof info.daily_limit === 'number' ? ` · ${Math.max(0, info.daily_limit - info.daily_requests).toLocaleString()} of ${info.daily_limit.toLocaleString()} requests left` : ' · unlimited'
+        const left = ` · ${describeUsage(info)}`
         // DARCE_DEMO=1 keeps your email out of screen recordings
         if (info.tier === 'trial') accountLine.current = `trial${left} · \`darce signup\` keeps going for free`
         else if (!process.env.DARCE_DEMO) accountLine.current = `${info.email} · ${plan}${left}`
@@ -886,7 +886,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const describe = async (apiKey: string, apiBase?: string) => {
       const info = await fetchAccount(apiKey, apiBase)
       if (!info) return ''
-      const limit = typeof info.daily_limit === 'string' ? 'unlimited' : `${info.daily_requests}/${info.daily_limit} requests used`
+      const limit = describeUsage(info)
       const plan = info.tier === 'free' ? 'Free' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
       return `${plan} plan · ${limit}`
     }

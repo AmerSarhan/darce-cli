@@ -127,7 +127,7 @@ Everything is optional; `darce` sets up `~/.darcerc` on first run.
 ```json
 {
   "mode": "auto",
-  "router": { "default": "qwen/qwen3-coder" },
+  "router": { "default": "anthropic/claude-haiku-5.5" },
   "gears": ["qwen/qwen3-coder-next", "qwen/qwen3-coder", "deepseek/deepseek-v4-pro", "anthropic/claude-sonnet-5.5"],
   "derbyModels": ["anthropic/claude-sonnet-5.5", "openai/gpt-5.6-sol", "google/gemini-3.1-pro-preview"],
   "critic": false,

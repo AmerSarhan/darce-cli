@@ -7,6 +7,13 @@ import type { ModelProfile } from '../types.js'
 
 export const MODEL_PROFILES: ModelProfile[] = [
   {
+    id: 'anthropic/claude-haiku-5.5',
+    strengths: ['coding', 'fast', 'cheap'],
+    contextWindow: 1000000,
+    costPer1kInput: 0.0001,
+    costPer1kOutput: 0.0005,
+  },
+  {
     id: 'qwen/qwen3-coder',
     strengths: ['coding', 'fast'],
     contextWindow: 262144,
@@ -241,6 +248,7 @@ export function getModelProfile(modelId: string): ModelProfile | undefined {
 // Popular coding models, in the order most people reach for them. OpenRouter has no public
 // popularity API, so this is curated; anything missing from the live catalog is skipped.
 export const POPULAR_MODELS = [
+  'anthropic/claude-haiku-5.5',
   'anthropic/claude-sonnet-5.5',
   'openai/gpt-5.6-sol',
   'google/gemini-3.1-pro-preview',

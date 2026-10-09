@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import type { DarceConfig, RouterConfig } from '../types.js'
 
 const DEFAULT_ROUTER: RouterConfig = {
-  default: 'qwen/qwen3-coder',
+  default: 'anthropic/claude-haiku-5.5',
   budget: 'medium',
   rules: [],
 }

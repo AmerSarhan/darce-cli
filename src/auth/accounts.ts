@@ -80,7 +80,22 @@ export function removeAccount(email?: string): { removed?: string; nowActive?: A
   return { removed: target, nowActive: next }
 }
 
-export type AccountInfo = { email: string; tier: string; daily_requests: number; daily_limit: number | string }
+export type Usage = { used_pct: number; window: 'day' | 'week' | null; resets_at: string | null; unlimited: boolean }
+export type AccountInfo = { email: string; tier: string; daily_requests: number; daily_limit: number | string; usage?: Usage }
+
+/** "12% of today's allowance used · resets in 5 h", from the account's usage report. */
+export function describeUsage(info: AccountInfo): string {
+  const u = info.usage
+  if (!u) return typeof info.daily_limit === 'string' ? 'unlimited' : `${info.daily_requests}/${info.daily_limit} requests used`
+  if (u.unlimited) return 'unlimited'
+  const span = u.window === 'day' ? "today's allowance" : u.window === 'week' ? "this week's allowance" : 'trial allowance'
+  let resets = ''
+  if (u.resets_at) {
+    const mins = Math.max(1, Math.round((new Date(u.resets_at).getTime() - Date.now()) / 60_000))
+    resets = ` · resets in ${mins < 60 ? `${mins} min` : mins < 48 * 60 ? `${Math.round(mins / 60)} h` : `${Math.round(mins / 1440)} days`}`
+  }
+  return `${Math.round(u.used_pct)}% of ${span} used${resets}`
+}
 
 export async function fetchAccount(apiKey: string, apiBase = 'https://api.darce.dev'): Promise<AccountInfo | null> {
   try {

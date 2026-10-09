@@ -179,7 +179,9 @@ export class OpenRouterProvider implements Provider {
 
         onActivity()
         trace('headers', { model, status: response.status, ms: since() })
-        if (response.status === 429 && retries < maxRetries) {
+        // A used-up Darce allowance won't clear in seconds: say so instead of retrying
+        const outOfAllowance = response.status === 429 && (await response.clone().json().catch(() => null) as { remaining?: number } | null)?.remaining === 0
+        if (response.status === 429 && !outOfAllowance && retries < maxRetries) {
           retries++
           const delay = Math.min(1000 * Math.pow(2, retries), 8000)
           debug(`Rate limited, retrying in ${delay}ms (attempt ${retries})`)

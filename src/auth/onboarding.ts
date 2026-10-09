@@ -110,7 +110,7 @@ export async function signupFlow(currentKey?: string): Promise<string | null> {
     return apiKey
   }
 
-  console.log('\n  Create your free account (25 requests a month, no card). Your trial and its history carry over.\n')
+  console.log('\n  Create your free account (a daily allowance, no card). Your trial and its history carry over.\n')
   const email = await askEmail(p.ask)
   if (!email) return null
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
@@ -242,9 +242,9 @@ export async function onboard(mode: 'choose' | 'signin' = 'choose'): Promise<str
     let choice = mode === 'signin' ? '3' : ''
     if (!choice) {
       console.log('\n  Welcome to Darce — the coding agent you can undo.\n')
-      console.log('    1) Try it now                       (10 free requests, no account)')
+      console.log('    1) Try it now                       (free, no account)')
       console.log('    2) Sign in with your browser')
-      console.log('    3) Create a free account here       (25 requests/month, no card needed)')
+      console.log('    3) Create a free account here       (daily allowance, no card needed)')
       console.log('    4) Sign in here with email and password\n')
       choice = await p.ask('  Choose 1-4 [1]: ')
       console.log()
@@ -258,7 +258,7 @@ export async function onboard(mode: 'choose' | 'signin' = 'choose'): Promise<str
       const t = await startTrial()
       if ('apiKey' in t) {
         saveCredentials(t.apiKey)
-        console.log(`  You're in: ${t.limit} free requests on fast models. When you want more, run \`darce signup\` and keep your history.\n`)
+        console.log(`  You're in. The trial covers a few real tasks. When you want more, run \`darce signup\` for a free daily allowance and keep your history.\n`)
         return t.apiKey
       }
       console.log(`  ${t.error} Let's sign in with your browser instead.\n`)
