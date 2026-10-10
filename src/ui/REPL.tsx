@@ -892,7 +892,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     }
     if (result === '__LOGIN__') {
       commit({ kind: 'user', id: newId(), text })
-      commit({ kind: 'system', id: newId(), text: 'Opening cli.darce.dev in your browser to sign in…' })
+      commit({ kind: 'system', id: newId(), text: 'Opening darce.dev in your browser to sign in…' })
       void browserLogin({ onUrl: url => commit({ kind: 'system', id: newId(), text: `If it didn't open, visit:\n${url}` }) })
         .then(async r => {
           const acct = addAccount(r.email, r.apiKey, state.config.apiBase || undefined)
@@ -930,7 +930,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         const lines = [
           active ? `Signed in as ${active}${d ? ` — ${d}` : ''}` : `Signed in${d ? ` — ${d}` : ' (account details unavailable)'}`,
           accounts.length > 1 ? `\nSaved accounts:\n${accounts.map(a => `  ${a.email === active ? '●' : '○'} ${a.email}`).join('\n')}\nSwitch with /account switch <email>.` : '',
-          '\n/login adds another account · /logout signs out · /upgrade changes your plan · dashboard: https://cli.darce.dev/dashboard',
+          '\n/login adds another account · /logout signs out · /upgrade changes your plan · dashboard: https://darce.dev/dashboard',
         ]
         commit({ kind: 'system', id: newId(), text: lines.filter(Boolean).join('\n') })
       })

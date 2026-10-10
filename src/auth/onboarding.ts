@@ -220,7 +220,7 @@ async function signIn(p: ReturnType<typeof createPrompter>, presetEmail?: string
       return null
     }
     console.log(result.status === 401
-      ? '  Wrong email or password. Try again, or reset it at https://cli.darce.dev/forgot\n'
+      ? '  Wrong email or password. Try again, or reset it at https://darce.dev/forgot\n'
       : `  ${result.message}\n`)
   }
   console.log('  Still stuck? Run `darce login` to try again.\n')
@@ -265,7 +265,7 @@ export async function onboard(mode: 'choose' | 'signin' = 'choose'): Promise<str
       choice = '1'
     }
     if (choice === '1') {
-      console.log('  Opening cli.darce.dev in your browser…')
+      console.log('  Opening darce.dev in your browser…')
       try {
         const r = await browserLogin({ onUrl: url => console.log(`  If it didn't open, visit:\n  ${url}\n\n  Waiting for you to sign in (Ctrl+C to cancel)…`) })
         apiKey = r.apiKey

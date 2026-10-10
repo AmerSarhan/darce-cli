@@ -43,7 +43,7 @@
     "type": "git",
     "url": "git+https://github.com/AmerSarhan/darce-cli.git"
   },
-  "homepage": "https://cli.darce.dev",
+  "homepage": "https://darce.dev",
   "files": [
     "dist",
     "LICENSE",

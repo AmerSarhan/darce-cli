@@ -118,7 +118,7 @@ darce --model openai/gpt-5.6-sol
 | **Requests** | 25/month | 500/month | 2,500/month |
 | **Models** | Fast open models (Qwen, DeepSeek, Gemini Flash…) | Most models, including Claude Sonnet | Every model, including Opus |
 
-Every plan gets every feature. Upgrade with `/upgrade` or at [cli.darce.dev](https://cli.darce.dev); cancel any time.
+Every plan gets every feature. Upgrade with `/upgrade` or at [darce.dev](https://darce.dev); cancel any time.
 
 ## Config
 
@@ -170,4 +170,4 @@ Issues and pull requests are welcome. Good first issues are labelled [`good firs
 
 [![Star History Chart](https://api.star-history.com/svg?repos=AmerSarhan/darce-cli&type=Date)](https://star-history.com/#AmerSarhan/darce-cli&Date)
 
-<p align="center"><sub><a href="LICENSE">MIT License</a> · <a href="https://cli.darce.dev">cli.darce.dev</a></sub></p>
+<p align="center"><sub><a href="LICENSE">MIT License</a> · <a href="https://darce.dev">darce.dev</a></sub></p>

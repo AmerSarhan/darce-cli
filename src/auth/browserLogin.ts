@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage } from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { openInBrowser } from '../core/billing.js'
 
-const LOGIN_PAGE = process.env.DARCE_LOGIN_URL || 'https://cli.darce.dev/cli-login'
+const LOGIN_PAGE = process.env.DARCE_LOGIN_URL || 'https://darce.dev/cli-login'
 
 const DONE_PAGE = (ok: boolean, email?: string) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${ok ? 'Signed in' : 'Sign-in failed'} · Darce</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#F4F5F7;color:#101828;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -21,7 +21,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 export type BrowserLoginResult = { email: string; apiKey: string }
 
 /**
- * Sign in through the browser: Darce listens on 127.0.0.1 only, opens cli.darce.dev,
+ * Sign in through the browser: Darce listens on 127.0.0.1 only, opens darce.dev,
  * and the page posts the key straight back to this machine. A one-time state value
  * ties the response to this request.
  */
