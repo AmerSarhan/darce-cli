@@ -2,6 +2,11 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.14.1
+
+- **Darce lives at darce.dev now.** Sign-in, the dashboard, password reset and every link in the CLI point there. Old cli.darce.dev links still redirect.
+- **Password reset from the sign-in screen.** A wrong password now points you to the reset page.
+
 ## 0.14.0
 
 - **Usage instead of request counts.** Plans now have an allowance measured by what your model calls actually cost: Free resets every day, Builder and Power every week. Fast models stretch it much further, so a free account gets real daily use. The welcome card and `/account` show how much you've used and when it resets, and Darce stops retrying once it's used up.
