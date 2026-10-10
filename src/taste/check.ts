@@ -161,8 +161,8 @@ function proseLines(lines: string[]): { text: string; line: number }[] {
   let inBlock = false
   lines.forEach((raw, i) => {
     const t = raw.trim()
-    if (inBlock) { if (t.includes('*/') || t.includes('-->')) inBlock = false; return }
-    if (/^(\/\*|\{\s*\/\*|<!--)/.test(t) && !/(\*\/|-->)/.test(t)) { inBlock = true; return }
+    if (inBlock) { if (/\*\/|--!?>/.test(t)) inBlock = false; return }
+    if (/^(\/\*|\{\s*\/\*|<!--)/.test(t) && !/(\*\/|--!?>)/.test(t)) { inBlock = true; return }
     if (COMMENT.test(raw) || /^\s*(import|export \* from|@import)\b/.test(raw)) return
     // Drop class attributes and URLs so tokens like "seamless-scroll" or slugs don't count as copy
     // Developer-only lines (logs, errors) aren't interface

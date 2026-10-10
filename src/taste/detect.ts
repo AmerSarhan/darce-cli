@@ -87,6 +87,10 @@ function collect(cfg: { filler: [string, string][]; fake: [string, string][]; em
   return { cands: out, sys }
 }
 
+// JSON is valid JS except for a few characters that can end a script tag or a line early
+const UNSAFE: Record<string, string> = { '<': '\\u003C', '>': '\\u003E', '/': '\\u002F', '\u2028': '\\u2028', '\u2029': '\\u2029' }
+const escapeUnsafe = (json: string) => json.replace(/[<>/\u2028\u2029]/g, c => UNSAFE[c]!)
+
 export function detectorScript(max = 6000): string {
   const cfg = {
     filler: FILLER.map(r => [r.source, r.flags]),
@@ -95,7 +99,7 @@ export function detectorScript(max = 6000): string {
     max,
   }
   // Bundlers may wrap named functions in a __name() helper that doesn't exist in the page
-  return `(() => { var __name = (f) => f; return (${collect.toString()})(${JSON.stringify(cfg)}) })()`
+  return `(() => { var __name = (f) => f; return (${collect.toString()})(${escapeUnsafe(JSON.stringify(cfg))}) })()`
 }
 
 const colorsIn = (css: string): Hsl[] =>
