@@ -27,7 +27,7 @@ function inline(tokens: Token[] | undefined): string {
       case 'strong': return chalk.bold(inline((tok as Tokens.Strong).tokens))
       case 'em': return chalk.italic(inline((tok as Tokens.Em).tokens))
       case 'del': return chalk.strikethrough(inline((tok as Tokens.Del).tokens))
-      case 'codespan': return chalk.hex(t.accent)((tok as Tokens.Codespan).text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"))
+      case 'codespan': return chalk.hex(t.accent)(decode((tok as Tokens.Codespan).text))
       case 'link': {
         const l = tok as Tokens.Link
         const text = inline(l.tokens)
@@ -46,7 +46,9 @@ function inline(tokens: Token[] | undefined): string {
   }).join('')
 }
 
-const decode = (s: string) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }
+/** Undo marked's HTML escaping in one pass, so "&amp;lt;" becomes "&lt;", not "<". */
+const decode = (s: string) => s.replace(/&(amp|lt|gt|quot|#39);/g, (_, e: string) => ENTITIES[e]!)
 
 /** Wrap text to width, indenting every line; the first line can use a different prefix (e.g. a bullet). */
 function wrap(text: string, width: number, indent: number, firstPrefix = ''): string {

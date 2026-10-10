@@ -21,7 +21,9 @@ export type BrainSource = {
   sessionDiff: () => FileDiff[] | null
 }
 
-const SECRET_FILE = /(^|\/)(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_(rsa|ed25519|ecdsa)(\.pub)?|\.npmrc|\.netrc|\.darcerc)$/i
+const SECRET_NAME = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_(rsa|ed25519|ecdsa)(\.pub)?|\.npmrc|\.netrc|\.darcerc)$/i
+/** Secrets are judged by file name alone; anchoring on the name keeps the match linear on any path. */
+const isSecretFile = (p: string) => SECRET_NAME.test(p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1))
 
 let running: { server: Server; url: string } | null = null
 
@@ -75,7 +77,7 @@ export async function startBrain(src: BrainSource): Promise<string> {
           const p = url.searchParams.get('path') ?? ''
           const abs = resolve(src.cwd, p)
           if (!abs.startsWith(resolve(src.cwd) + sep)) return send(res, 400, 'text/plain', 'Outside the project')
-          if (SECRET_FILE.test(p)) return json(res, { path: p, hidden: true })
+          if (isSecretFile(p)) return json(res, { path: p, hidden: true })
           const diff = (src.sessionDiff() ?? []).map(rel).find(d => d.path === p) ?? null
           let content: string | null = null
           try { if (statSync(abs).size <= 400 * 1024) content = readFileSync(abs, 'utf8') } catch { /* deleted or unreadable */ }

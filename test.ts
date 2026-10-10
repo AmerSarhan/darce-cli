@@ -556,7 +556,7 @@ async function testWebFetchTool() {
   })
 
   await test('WebFetchTool: activityDescription with url', () => {
-    return WebFetchTool.activityDescription({ url: 'https://example.com' }).includes('example.com')
+    return WebFetchTool.activityDescription({ url: 'https://example.com' }) === 'Fetching https://example.com'
   })
 }
 
@@ -1346,7 +1346,7 @@ async function testBrain() {
     const { imagePathFrom } = await import('./src/ui/input/images.js')
     const f = join(TMP_DIR, 'shot one.png')
     writeFileSync(f, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
-    return imagePathFrom(`'${f}'`, '/') === f && imagePathFrom(f.replace(/ /g, '\\ '), '/') === f && imagePathFrom('notes.txt', TMP_DIR) === null
+    return imagePathFrom(`'${f}'`, '/') === f && imagePathFrom(f.replace(/[\\ ]/g, '\\$&'), '/') === f && imagePathFrom('notes.txt', TMP_DIR) === null
   })
   await test('Images: sent to the model as image_url parts; counted as ~1500 tokens', async () => {
     const msgs: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'what is this' }, { type: 'image', mediaType: 'image/png', data: 'A'.repeat(100000) }] }]

@@ -15,11 +15,17 @@ type Output = { query: string; results: Result[]; via: 'direct' | 'stealth' }
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
 
-const decode = (s: string) => s
-  .replace(/<[^>]+>/g, '')
-  .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
-  .replace(/\s+/g, ' ')
-  .trim()
+const ENTITIES: Record<string, string> = { amp: '&', quot: '"', '#x27': "'", '#39': "'", lt: '<', gt: '>', nbsp: ' ' }
+
+/** Plain text from a snippet of result HTML. Entities decode in one pass, so "&amp;lt;" stays "&lt;". */
+const decode = (html: string) => {
+  let s = html
+  for (let prev = ''; prev !== s;) { prev = s; s = s.replace(/<[^<>]*>/g, '') }
+  return s
+    .replace(/&(amp|quot|#x27|#39|lt|gt|nbsp);/g, (_, e: string) => ENTITIES[e]!)
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 
 /** Parse DuckDuckGo's HTML results page. */
 export function parseDuckDuckGo(html: string): Result[] {

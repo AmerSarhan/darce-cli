@@ -1,22 +1,22 @@
-import fg from 'fast-glob'
+import { glob } from 'tinyglobby'
 import { spawn } from 'node:child_process'
 
 // Dependency and build folders at any depth (a workspace often holds many projects)
 export const DEEP_IGNORE = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/.next/**', '**/build/**', '**/.venv/**', '**/venv/**', '**/__pycache__/**', '**/target/**', '**/.turbo/**', '**/coverage/**', '**/.cache/**', '**/Pods/**', '**/vendor/**']
 
 /**
- * Files matching a pattern, streamed so a huge folder can't hang Darce: stops at `max` results or
- * after `budgetMs`, whichever comes first, and says whether it stopped early.
+ * Files matching a pattern, so a huge folder can't hang Darce: the crawl stops after `budgetMs`,
+ * at most `max` files come back, and it says whether it stopped early.
  */
 export async function walk(cwd: string, pattern: string, opts: { max: number; budgetMs: number; deep?: number }): Promise<{ files: string[]; truncated: boolean }> {
-  const stream = fg.stream(pattern, { cwd, ignore: DEEP_IGNORE, onlyFiles: true, dot: false, followSymbolicLinks: false, suppressErrors: true, deep: opts.deep })
-  const files: string[] = []
-  const t0 = Date.now()
-  for await (const f of stream) {
-    files.push(String(f))
-    if (files.length >= opts.max || Date.now() - t0 > opts.budgetMs) return { files, truncated: true }
+  const signal = AbortSignal.timeout(opts.budgetMs)
+  let found: string[]
+  try {
+    found = await glob(pattern, { cwd, ignore: DEEP_IGNORE, onlyFiles: true, dot: false, followSymbolicLinks: false, expandDirectories: false, deep: opts.deep, signal })
+  } catch {
+    return { files: [], truncated: signal.aborted }
   }
-  return { files, truncated: false }
+  return { files: found.slice(0, opts.max), truncated: signal.aborted || found.length > opts.max }
 }
 
 /** Tracked and untracked-but-not-ignored files from git, or null outside a repository. Runs in its own process. */
