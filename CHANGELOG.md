@@ -2,6 +2,10 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.14.2
+
+- **Security fixes.** Dropped a file-matching dependency with a known denial-of-service bug (Darce now uses `git ls-files` and a lighter matcher), updated esbuild, and hardened how web search results and Markdown are cleaned up.
+
 ## 0.14.1
 
 - **Darce lives at darce.dev now.** Sign-in, the dashboard, password reset and every link in the CLI point there. Old cli.darce.dev links still redirect.
