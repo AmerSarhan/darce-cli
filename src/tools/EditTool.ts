@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
 import { fileDiff } from '../utils/diff.js'
+import { tasteForEdit } from '../taste/check.js'
 
 const inputSchema = z.object({
   file_path: z.string().describe('Absolute path to the file to edit'),
@@ -52,7 +53,8 @@ export const EditTool: ToolDef<typeof inputSchema, string> = {
 
       await writeFile(filePath, updated, 'utf-8')
       const display = fileDiff(String(input.file_path), content, updated)
-      return { data: `File updated: ${input.file_path} (+${display.added} -${display.removed})`, display }
+      const taste = tasteForEdit(filePath, String(input.file_path), updated, display, context.cwd)
+      return { data: `File updated: ${input.file_path} (+${display.added} -${display.removed})${taste}`, display }
     } catch (err: any) {
       return { data: `Error editing file: ${err.message}`, isError: true }
     }

@@ -62,6 +62,10 @@ To install it for good: `npm install -g darce-cli`, then run `darce` in any proj
   <img src="assets/demo-brain.gif" width="880" alt="/brain while Darce renames a function across five files: each file it edits opens in the middle with its imports on the left and its dependents highlighted on the right, the diff below, and every step in the activity column">
 </p>
 
+## Catch the generated look before you ship
+
+`/taste` renders your app in Chrome and opens a window that pins what reads as templated: purple gradients, gradient headlines, emoji standing in for icons, filler copy like "seamlessly leverage", made-up proof, and the framework's stock palette used as-is. It also reads the page's style system (palette, type scale, radii) and how the code is built (the same class list pasted in eight files, components holding a whole screen of state). Pick Fix or Keep for each item, and Darce does the fixing while the window shows its progress, asks for approvals right there, and ends on a before/after you can drag across. When Darce writes UI itself, it runs the same checks on every edit and cleans up after itself.
+
 `/swarm` splits a task into threads that run at the same time, each in its own worktree, then merges them:
 
 <p align="center">
@@ -126,6 +130,7 @@ The same agent and the same undo, in a Mac app with your files and an editor bes
 | `/resume` | Continue a past conversation |
 | `/why on\|off` | WHY notes (on by default) |
 | `/brain` | Live map of your codebase while Darce works (opens in your browser) |
+| `/taste [url]` | See what makes your UI look generated and choose what Darce fixes (opens a window). `/taste list` prints it, `/taste off` stops checks on edits |
 | `/voice on\|off` | Darce talks you through long tasks (voices: erik, joe, zara, callum, charlotte) |
 | `/critic on\|off [model]` | Second-opinion review of every edit |
 | `/security [changes]` | Security review of the project or your uncommitted changes |

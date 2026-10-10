@@ -130,6 +130,8 @@ export type DarceConfig = {
   /** What Darce calls you; defaults to the first name in your account email */
   voiceName?: string
   why?: boolean
+  /** Taste check on UI edits (default on) */
+  taste?: boolean
   /** Models raced by /derby */
   derbyModels?: string[]
   /** Environment variables Bash may see even though they look like secrets */

@@ -1,8 +1,9 @@
 import { structuredPatch } from 'diff'
+import type { TasteFinding } from '../taste/check.js'
 
 export type DiffLine = { kind: 'add' | 'del' | 'ctx'; text: string; oldNo?: number; newNo?: number }
 export type DiffHunk = { lines: DiffLine[] }
-export type FileDiff = { kind: 'diff'; path: string; created: boolean; added: number; removed: number; hunks: DiffHunk[] }
+export type FileDiff = { kind: 'diff'; path: string; created: boolean; added: number; removed: number; hunks: DiffHunk[]; taste?: TasteFinding[] }
 
 /** Structured, display-ready diff between two versions of a file. */
 export function fileDiff(path: string, before: string | null, after: string): FileDiff {

@@ -2,6 +2,13 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.15.0
+
+- **Taste studio.** `/taste` renders your app in Chrome (desktop and phone width) and opens a window with numbered pins on what reads as templated: purple or rainbow gradients, gradient headlines, emoji standing in for icons, colored side stripes, glow blobs, filler copy and unproven claims (word list based on no-ai-slop), and Tailwind's stock palette used unchanged. Each pin points to the file and line it comes from, including copy that lives in data files.
+- **System and code views.** The System tab shows the page's palette, type scale, corner radii and typefaces as rendered. The Code tab finds class lists pasted in many places, colors typed out across files, and components carrying a whole screen of state.
+- **Fix from the window.** Choose Fix or Keep for each item. Darce fixes the chosen ones, the window shows each step as it happens and asks for approvals in place, then shows a before/after slider. Keeps are remembered in `.darce/taste.json`.
+- **Taste check on edits.** When Darce writes UI, the lines it added are checked and anything that reads as generated goes back to it in the same step, so it fixes its own work. `/taste off` turns this off.
+
 ## 0.14.2
 
 - **Security fixes.** Dropped a file-matching dependency with a known denial-of-service bug (Darce now uses `git ls-files` and a lighter matcher), updated esbuild, and hardened how web search results and Markdown are cleaned up.

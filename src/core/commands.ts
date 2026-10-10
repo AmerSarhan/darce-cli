@@ -168,6 +168,11 @@ const COMMANDS: SlashCommand[] = [
     execute: (args) => `__THREADS__:${args.trim()}`,
   },
   {
+    name: 'taste',
+    description: 'See what makes your UI look generated, and choose what to fix (opens a window). /taste localhost:3000/pricing, /taste list, /taste off',
+    execute: (args) => `__TASTE__:${args.trim()}`,
+  },
+  {
     name: 'critic',
     description: 'Another vendor\'s model reviews every edit',
     execute: (args) => `__CRITIC__:${args.trim()}`,

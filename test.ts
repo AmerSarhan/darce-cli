@@ -54,6 +54,8 @@ import { buildSystemPrompt, resetContext } from './src/core/context.js'
 import type { ToolContext, Message, RouterConfig, StreamEvent } from './src/types.js'
 import { isCodingModel } from './src/config/models.js'
 import { wantsSecondOpinion } from './src/core/riskcheck.js'
+import { checkTaste, parseColor, setTasteEnabled } from './src/taste/check.js'
+import { scanTaste } from './src/taste/scan.js'
 
 // ============================================================
 // Test framework
@@ -872,6 +874,7 @@ async function runTests() {
   await testCodingModels()
   await testPhase2()
   await testBrain()
+  await testTaste()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -1427,6 +1430,113 @@ async function testBrain() {
       && !wantsWhy('what does this project do?') && !wantsWhy('add a phone field to the user form') && !wantsWhy('rename x to total')
   })
   await test('Web: bot walls are detected', () => looksBlocked(403, '') && looksBlocked(200, '<title>Just a moment...</title>') && !looksBlocked(200, '<h1>Docs</h1>'))
+}
+
+async function testTaste() {
+  const rules = (path: string, src: string) => new Set(checkTaste(path, src).map(f => f.rule))
+  const slop = [
+    'export default function Landing() {',
+    '  return (',
+    '    <main className="bg-gradient-to-br from-purple-600 via-indigo-500 to-blue-500">',
+    '      <div className="absolute h-72 w-72 rounded-full bg-fuchsia-500 blur-3xl" />',
+    '      <span className="uppercase tracking-widest text-indigo-300">Introducing</span>',
+    '      <h1 className="bg-gradient-to-r from-pink-500 to-violet-500 bg-clip-text text-transparent">Supercharge your workflow 🚀</h1>',
+    '      <p>Seamlessly leverage AI. Trusted by 10,000+ developers</p>',
+    '      <div className="hover:scale-105 border-l-4 border-emerald-500"><span className="uppercase tracking-wider text-teal-400">Fast</span></div>',
+    '      <div className="hover:scale-105 text-orange-500"><span className="uppercase tracking-wider text-rose-400">Safe</span></div>',
+    '      <div className="hover:scale-105 text-cyan-500 text-yellow-500">Magic</div>',
+    '      <blockquote>"Great product." John Doe, Acme Corp</blockquote>',
+    '    </main>',
+    '  )',
+    '}',
+  ].join('\n')
+
+  await test('Taste: a generated-looking page trips every rule', () => {
+    const r = rules('Landing.tsx', slop)
+    return ['ai-gradient', 'gradient-text', 'emoji-icon', 'stripe-border', 'glow-blob', 'filler-copy', 'fake-proof', 'accent-sprawl', 'hover-lift'].every(x => r.has(x as never))
+  })
+  await test('Taste: CSS gradients, stripes, blobs and clipped text are read too', () => {
+    const css = '.a { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }\n.b { border-left: 4px solid #6366f1; }\n.c { border-radius: 50%; background: #8b5cf6; filter: blur(80px); }\n.d { background: linear-gradient(90deg, #f97316, #f59e0b); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }'
+    const r = rules('x.css', css)
+    return r.has('ai-gradient') && r.has('stripe-border') && r.has('glow-blob') && r.has('gradient-text')
+  })
+  await test('Taste: designed code stays quiet', () => {
+    const designed = [
+      '<section className="bg-[#0e0d0c] text-[#f4f2ee]">',
+      '  <h1 className="text-5xl font-semibold tracking-tight">The coding agent you can undo</h1>',
+      '  <p className="text-sm uppercase tracking-wide text-zinc-400">Beta</p>',
+      '  <div className="bg-gradient-to-b from-orange-500 to-amber-600 rounded-xl" />',
+      '  <h2 className="bg-gradient-to-b from-foreground to-foreground/70 bg-clip-text text-transparent">Ink fade</h2>',
+      '  <button className="hover:-translate-y-0.5 bg-orange-500">Install</button>',
+      '  <input placeholder="e.g. Acme Industrial Supply Co." />',
+      '  <img src="/icons/seamless.svg" alt="" />',
+      '  <code>~/acme-todos</code>',
+      '  <p className="text-red-600">Payment failed</p><p className="text-emerald-600">Saved</p>',
+      '</section>',
+    ].join('\n')
+    const js = 'console.log("✅ synced", n)\nthrow new Error("🚫 nope")'
+    return checkTaste('Hero.tsx', designed).length === 0 && checkTaste('sync.tsx', js).length === 0 && checkTaste('Hero.test.tsx', slop).length === 0
+  })
+  await test('Taste: only lines an edit added are reported; ignore comments and taste.json work', () => {
+    const before = checkTaste('Landing.tsx', slop, new Set([7])).map(f => f.rule)
+    const ignored = slop.replace('<p>Seamlessly', '{/* darce-taste-ignore */}<p>Seamlessly')
+    const off = checkTaste('Landing.tsx', slop, undefined, { off: new Set(['emoji-icon', 'filler-copy']) }).map(f => f.rule)
+    return before.join() === 'filler-copy,fake-proof' && !checkTaste('Landing.tsx', ignored, new Set([7])).some(f => f.rule === 'filler-copy')
+      && !off.includes('emoji-icon') && !off.includes('filler-copy') && off.includes('ai-gradient')
+      && checkTaste('server.ts', 'const x = "seamless"').length === 0 && checkTaste('notes.md', '🚀 seamless').length === 0
+  })
+  await test('Taste: testimonials Darce writes are flagged, existing ones are not; CSS card lifts count', () => {
+    const page = '<section>\n<figure class="quote"><blockquote>Tickd changed my week.</blockquote><figcaption>Alex Kim</figcaption></figure>\n<figure class="quote"><blockquote>Love it.</blockquote></figure>\n</section>'
+    const added = checkTaste('index.html', page, new Set([2, 3])).filter(f => f.rule === 'fake-proof')
+    const css = '.card:hover { transform: translateY(-6px); }\n.btn:hover { transform: translateY(-1px); }'
+    return added.length === 1 && checkTaste('index.html', page).length === 0 && checkTaste('a.css', css).map(f => f.line).join() === '1'
+  })
+  await test('Taste: stock framework palette is caught, a chosen brand color and status colors are not', async () => {
+    const { analyzeSystem } = await import('./src/taste/system.js')
+    const t = (colors: string[]) => Object.fromEntries(colors.map(c => [c, { n: 3, boxes: [] }]))
+    const base = { size: t(['16', '24']), family: t(['Inter']), radius: t(['8']) }
+    const stock = analyzeSystem({ ...base, text: t(['rgb(99, 102, 241)', 'rgb(24, 24, 27)']), surface: t(['rgb(37, 99, 235)', 'rgb(255, 255, 255)']), border: {} })
+    const brand = analyzeSystem({ ...base, text: t(['rgb(232, 137, 43)', 'rgb(24, 24, 27)']), surface: t(['rgb(255, 255, 255)']), border: {} })
+    const status = analyzeSystem({ ...base, text: t(['rgb(22, 163, 74)', 'rgb(220, 38, 38)', 'rgb(24, 24, 27)']), surface: {}, border: {} })
+    const v4 = analyzeSystem({ ...base, text: t(['oklch(58.5% 0.233 277.117)', 'oklch(54.6% 0.245 262.881)']), surface: {}, border: {} })
+    const has = (r: { findings: { rule: string }[] }) => r.findings.some(f => f.rule === 'stock-palette')
+    return has(stock) && has(v4) && !has(brand) && !has(status)
+  })
+  await test('Taste: pasted styles and hand-typed colors are found across a project', async () => {
+    const { analyzeProject } = await import('./src/taste/project.js')
+    const dir = join(TMP_DIR, 'taste-project'); mkdirSync(join(dir, 'src'), { recursive: true })
+    const btn = 'className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"'
+    for (let k = 0; k < 6; k++) writeFileSync(join(dir, 'src', `P${k}.tsx`), `export const P${k} = () => <div style={{ color: '#4f46e5', background: '#eef2ff', borderColor: '#c7d2fe', outlineColor: '#312e81' }}><button ${btn}>Go</button></div>\n`)
+    const f = analyzeProject(dir)
+    const pasted = f.find(x => x.rule === 'pasted-styles')
+    return !!pasted && pasted.spots.length === 6 && /pasted 6 times in 6 files/.test(pasted.label) && f.some(x => x.rule === 'hardcoded-colors')
+  })
+  await test('Taste: colors parse in every common format', () => {
+    const p = (c: string) => Math.round(parseColor(c)?.h ?? -1)
+    return p('#7c3aed') > 255 && p('#7c3aed') < 270 && p('rgb(124, 58, 237)') === p('#7c3aed') && p('hsl(262 83% 58%)') === 262
+      && p('oklch(62.7% 0.265 303.9)') > 235 && p('oklch(62.7% 0.265 303.9)') < 305 && p('#fff') === 0 && parseColor('var(--x)') === null
+  })
+  await test('Taste: Write and Edit hand findings to the model, clean edits stay silent', async () => {
+    const dir = join(TMP_DIR, 'taste-app'); mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'Hero.tsx')
+    const ctx = makeCtx(dir)
+    const w = await WriteTool.call({ file_path: file, content: '<h1 className="text-4xl">Undo anything</h1>\n' }, ctx)
+    const e = await EditTool.call({ file_path: file, old_string: 'Undo anything', new_string: 'Supercharge your flow 🚀' }, ctx)
+    setTasteEnabled(false)
+    const e2 = await EditTool.call({ file_path: file, old_string: 'Supercharge your flow 🚀', new_string: 'Unleash it 🚀' }, ctx)
+    setTasteEnabled(true)
+    const d = e.display as { taste?: unknown[] }
+    return !String(w.data).includes('Taste check') && String(e.data).includes('Taste check on') && String(e.data).includes('line 1') && (d.taste?.length ?? 0) === 2 && !String(e2.data).includes('Taste check')
+  })
+  await test('Taste: /taste scans a folder and skips dependencies', () => {
+    const dir = join(TMP_DIR, 'taste-scan'); mkdirSync(join(dir, 'node_modules', 'lib'), { recursive: true }); mkdirSync(join(dir, 'src'), { recursive: true })
+    writeFileSync(join(dir, 'src', 'Page.tsx'), slop)
+    writeFileSync(join(dir, 'node_modules', 'lib', 'Bad.tsx'), slop)
+    writeFileSync(join(dir, 'src', 'api.ts'), 'export const seamless = 1')
+    const s = scanTaste(dir, 'src')
+    const all = scanTaste(dir, '.')
+    return s.files === 1 && s.results.length === 1 && s.results[0]!.path.endsWith('Page.tsx') && all.results.every(r => !r.path.includes('node_modules'))
+  })
 }
 
 runTests().catch(err => {

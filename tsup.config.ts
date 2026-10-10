@@ -23,5 +23,9 @@ export default defineConfig({
     mkdirSync('dist/brain', { recursive: true })
     await build({ entryPoints: ['src/brain/web/app.ts'], bundle: true, minify: true, format: 'iife', target: 'es2020', outfile: 'dist/brain/app.js', logLevel: 'warning' })
     copyFileSync('src/brain/web/index.html', 'dist/brain/index.html')
+    // The taste studio (/taste) the same way, from dist/taste
+    mkdirSync('dist/taste', { recursive: true })
+    await build({ entryPoints: ['src/taste/web/app.ts'], bundle: true, minify: true, format: 'iife', target: 'es2020', outfile: 'dist/taste/app.js', logLevel: 'warning' })
+    copyFileSync('src/taste/web/index.html', 'dist/taste/index.html')
   },
 })

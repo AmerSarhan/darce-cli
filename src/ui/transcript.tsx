@@ -10,6 +10,7 @@ import type { ToolDisplay, PlanDisplay } from '../types.js'
 import { PlanPanel } from './PlanPanel.js'
 import { Welcome } from './Welcome.js'
 import { Receipt, type ReceiptData } from './Receipt.js'
+import { TasteView } from './TasteView.js'
 
 // Everything that has happened in the session. Committed items are printed
 // once via <Static> and never re-rendered.
@@ -149,6 +150,7 @@ export function TranscriptItemView({ item }: { item: TranscriptItem }) {
             path={item.path}
           />
           {diff && <DiffView diff={diff} maxLines={diff.created ? 12 : 40} />}
+          {diff?.taste?.length ? <TasteView findings={diff.taste} /> : null}
           {preview.length > 0 && (
             <Box marginLeft={2} flexDirection="column">
               {preview.map((l, i) => <Text key={i} color={t.faint}>{l || ' '}</Text>)}

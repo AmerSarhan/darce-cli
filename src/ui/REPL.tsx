@@ -39,6 +39,9 @@ import { Intro } from './Welcome.js'
 import type { PlanDisplay } from '../types.js'
 import { Derby, defaultRacers } from '../core/derby.js'
 import { pickCritic, reviewEdit } from '../core/critic.js'
+import { setTasteEnabled, tasteEnabled } from '../taste/check.js'
+import { formatScan, scanTaste } from '../taste/scan.js'
+import { openStudioWindow, startStudio, stopStudio } from '../taste/studio.js'
 import { DEFAULT_GEARS, gearIndex, shiftGear, priceNote } from '../config/gears.js'
 import { createCheckout, openInBrowser } from '../core/billing.js'
 import { DISCORD_URL } from '../community.js'
@@ -160,6 +163,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [staticKey, setStaticKey] = useState(0)
   const [editor, dispatch] = useReducer(editorReducer, undefined, () => emptyEditor(loadHistory()))
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  busyRef.current = busy
   const [activity, setActivity] = useState<Activity | null>(null)
   const [tail, setTail] = useState('')
   const [queue, setQueue] = useState<string[]>([])
@@ -168,6 +173,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [hint, setHint] = useState<string | undefined>()
   const [contextTokens, setContextTokens] = useState(() => estimateMessagesTokens(restored ?? []))
   const [pending, setPending] = useState<Pending | null>(null)
+  const pendingRef = useRef<Pending | null>(null)
+  pendingRef.current = pending
   const [tape, setTape] = useState<{ index: number; preview: FileDiff[] | null } | null>(null)
   const [derby, setDerby] = useState<{ d: Derby; task: string; selected: number; finished: boolean; variant?: 'derby' | 'swarm' } | null>(null)
   const [, setDerbyTick] = useState(0)
@@ -180,6 +187,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const turnThreadsFrom = useRef(0)
   const [livePlan, setLivePlan] = useState<PlanDisplay | null>(null)
   const [learnOn, setLearnOn] = useState(state.config.why !== false)
+  useState(() => setTasteEnabled(state.config.taste !== false))
   const [menuIndex, setMenuIndex] = useState(0)
   const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
   const [search, setSearch] = useState<{ query: string; skip: number } | null>(null)
@@ -324,13 +332,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setStaticKey(k => k + 1)
   }, [write, banner])
 
-  const runQuery = useCallback(async (text: string, attachments = '', images: ImageContent[] = []) => {
+  const runQuery = useCallback(async (text: string, attachments = '', images: ImageContent[] = [], shown?: string) => {
     setBusy(true)
     setSuggestion(null)
     turnThreadsFrom.current = threadsRef.current.length
     const turnStarted = Date.now()
     trace('turn_start', { model: modelRef.current, mode: modeRef.current, history: messagesRef.current.length })
-    commit({ kind: 'user', id: newId(), text })
+    commit({ kind: 'user', id: newId(), text: shown ?? text })
     // Notes about things the user did between turns (e.g. /undo) ride along with the next message
     const notes = notesRef.current.splice(0)
     // The WHY note goes after the request: models follow a trailing instruction far more reliably
@@ -1069,6 +1077,42 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       }
       const icon = (s: Thread['status']) => (s === 'done' ? '✓' : s === 'error' ? '✗' : s === 'stopped' ? '■' : '…')
       commit({ kind: 'system', id: newId(), text: `Threads this session\n${all.map(t => `  ${String(t.id).padStart(2)} ${icon(t.status)} ${t.title.padEnd(34).slice(0, 34)} ${t.kind.padEnd(8)} ${t.steps} steps · ${Math.round(t.ms / 1000)}s · $${t.cost.toFixed(4)}`).join('\n')}\n/threads <number> shows a thread's steps and report.` })
+      return
+    }
+    if (result?.startsWith('__TASTE__:')) {
+      const arg = result.slice(10)
+      if (arg === 'on' || arg === 'off') {
+        setTasteEnabled(arg === 'on')
+        saveGlobalSetting('taste', arg === 'on')
+        commit({ kind: 'system', id: newId(), text: arg === 'on'
+          ? 'Taste check on: when Darce writes UI, it checks its own work for things that look generated and fixes them.'
+          : 'Taste check off. /taste still opens the studio when you ask.' })
+        return
+      }
+      if (arg === 'stop') { stopStudio(); commit({ kind: 'system', id: newId(), text: 'Taste studio closed.' }); return }
+      // A plain-text report, for when there's no browser or you want it in the terminal
+      if (arg === 'list' || arg.startsWith('list ')) {
+        try { commit({ kind: 'system', id: newId(), text: formatScan(scanTaste(state.cwd, arg.slice(4).trim())) + (tasteEnabled() ? '' : '\n(Checks on edits are off. /taste on turns them back on.)') }) }
+        catch (err) { commit({ kind: 'error', id: newId(), text: (err as Error).message }) }
+        return
+      }
+      void startStudio({
+        cwd: state.cwd,
+        fix: (prompt, shown) => runQuery(prompt, '', [], shown),
+        busy: () => busyRef.current,
+        pending: () => { const p = pendingRef.current; return p ? { command: p.req.detail || p.req.summary, reason: p.req.risk.reason } : null },
+        decide: allow => {
+          const p = pendingRef.current
+          if (!p) return false
+          pendingRef.current = null
+          p.resolve(allow ? { allow: true, via: 'approved in the taste studio' } : { allow: false, reason: 'the user denied this action in the taste studio. Ask what they would like instead, or try a safer approach.' })
+          return true
+        },
+        say: text => commit({ kind: 'system', id: newId(), text }),
+      }, arg).then(url => {
+        openStudioWindow(url, openInBrowser)
+        commit({ kind: 'system', id: newId(), text: `Taste studio is opening in its own window. It renders your page, pins what looks generated, and you choose what Darce fixes.\n${url}` })
+      }).catch(err => commit({ kind: 'error', id: newId(), text: `Couldn't start the taste studio: ${(err as Error).message}` }))
       return
     }
     if (result?.startsWith('__CRITIC__:')) {
