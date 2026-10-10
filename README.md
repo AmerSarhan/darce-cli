@@ -66,6 +66,10 @@ To install it for good: `npm install -g darce-cli`, then run `darce` in any proj
 
 `/taste` renders your app in Chrome and opens a window that pins what reads as templated: purple gradients, gradient headlines, emoji standing in for icons, filler copy like "seamlessly leverage", made-up proof, and the framework's stock palette used as-is. It also reads the page's style system (palette, type scale, radii) and how the code is built (the same class list pasted in eight files, components holding a whole screen of state). Pick Fix or Keep for each item, and Darce does the fixing while the window shows its progress, asks for approvals right there, and ends on a before/after you can drag across. When Darce writes UI itself, it runs the same checks on every edit and cleans up after itself.
 
+<p align="center">
+  <img src="assets/demo-taste.gif" width="880" alt="/taste on a generated-looking landing page: pins drop on the purple gradients, gradient headline, emoji icons and filler copy; the System tab flags the stock Tailwind palette; Darce fixes all 28 while the window shows each step; a before/after slider ends on Before 28, Now 0">
+</p>
+
 `/swarm` splits a task into threads that run at the same time, each in its own worktree, then merges them:
 
 <p align="center">

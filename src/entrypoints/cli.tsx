@@ -14,7 +14,7 @@ if (args.includes('--version') || args.includes('-v')) {
 
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`
-  darce - A blazing-fast AI coding agent by darce.dev
+  darce - the coding agent you can undo, by darce.dev
 
   Usage:
     darce                           Interactive REPL

@@ -88,7 +88,8 @@ async function load() {
   version = r.version
   if (!r.views[view]) view = r.views.desktop ? 'desktop' : 'mobile'
   // Land on a tab that has something, the first time there's a result
-  if (fresh && r.phase === 'ready' && !of(tab).length) tab = of('page').length ? 'page' : of('system').length ? 'system' : of('code').length ? 'code' : 'page'
+  // (after a fix, stay on the page: the before/after is the point)
+  if (fresh && r.phase === 'ready' && r.previous == null && !of(tab).length) tab = of('page').length ? 'page' : of('system').length ? 'system' : of('code').length ? 'code' : 'page'
   void wasPhase
   render(false)
 }

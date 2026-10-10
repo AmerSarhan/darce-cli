@@ -2,6 +2,11 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.15.1
+
+- **The taste studio stays on the page after a fix**, so the before/after is the first thing you see, and the empty status line no longer shows before Darce has said anything.
+- `darce --help` describes Darce without the marketing filler the taste check flags.
+
 ## 0.15.0
 
 - **Taste studio.** `/taste` renders your app in Chrome (desktop and phone width) and opens a window with numbered pins on what reads as templated: purple or rainbow gradients, gradient headlines, emoji standing in for icons, colored side stripes, glow blobs, filler copy and unproven claims (word list based on no-ai-slop), and Tailwind's stock palette used unchanged. Each pin points to the file and line it comes from, including copy that lives in data files.
