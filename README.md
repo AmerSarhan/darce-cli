@@ -116,6 +116,19 @@ Checked October 2026. The full, sourced comparison of 12 agents is at [darce.dev
 
 Usage is measured by what the work actually costs, so fast models go much further. Every plan gets every feature, there are no surprise bills, and you can cancel any time. Upgrade with `/upgrade` or at [darce.dev/pricing](https://darce.dev/pricing).
 
+### Use your own OpenRouter key
+
+Darce also runs on your own [OpenRouter](https://openrouter.ai) key, with no Darce account. Requests go straight to OpenRouter and are billed to your OpenRouter account. Add this to `~/.darcerc`:
+
+```json
+{
+  "apiKey": "sk-or-v1-…",
+  "apiBase": "https://openrouter.ai/api"
+}
+```
+
+Or set `DARCE_API_KEY` and `DARCE_API_BASE=https://openrouter.ai/api` for one run. Everything in the terminal works the same, including `/undo`, `/derby`, `/swarm`, `/taste` and `/brain`. Image generation, voice and the second look at scripts run on Darce's server, so they need a Darce account.
+
 ## Coming soon: Darce for Mac
 
 The same agent and the same undo, in a Mac app with your files and an editor beside it, plus three gears for how much Darce teaches you as it works: Ship, Understand and Learn. [Get one email when it ships](https://darce.dev/#mac).

@@ -112,6 +112,8 @@ export async function secondOpinion(command: string, cwd: string, apiKey: string
   const innerWords = pkg ? firstCommand(pkg.text) : null
   const file = scriptFile(words) ?? (innerWords ? scriptFile(innerWords) : undefined)
   const source = file ? readHead(file, cwd) : undefined
+  // Jev runs on Darce's API; with your own OpenRouter key there's nothing to ask, and the script shouldn't go elsewhere
+  if (!/(^|\.)darce\.dev(\/|:|$)/.test(apiBase.replace(/^https?:\/\//, ''))) return null
   const started = Date.now()
   try {
     const res = await fetch(`${apiBase.replace(/\/$/, '')}/v1/risk`, {
