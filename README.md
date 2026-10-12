@@ -19,6 +19,10 @@
 </p>
 
 <p align="center">
+  <a href="https://www.producthunt.com/products/darce?embed=true&utm_source=badge-featured&utm_medium=badge&launch=darce" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1274948&theme=light" alt="Darce on Product Hunt" width="250" height="54"></a>
+</p>
+
+<p align="center">
   <a href="https://darce.dev">Website</a> ·
   <a href="https://darce.dev/docs">Docs</a> ·
   <a href="#quick-start">Quick start</a> ·
