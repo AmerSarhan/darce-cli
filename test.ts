@@ -875,6 +875,9 @@ async function runTests() {
   await testPhase2()
   await testBrain()
   await testTaste()
+  await testToolStability()
+  await testStability()
+  await testStartupSafety()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -1185,7 +1188,7 @@ async function testPhase1() {
     const b = buildSystemPrompt('/tmp/project-b')
     return a.includes('/tmp/project-a') && b.includes('/tmp/project-b') && !b.includes('/tmp/project-a')
   })
-  await test('Checkpoints: undo reverts shell effects and keeps git state', () => {
+  await test('Checkpoints: undo reverts shell effects and keeps git state', async () => {
     const repo = join(TMP_DIR, 'cp-repo')
     mkdirSync(repo, { recursive: true })
     execSync('git init -q && git config user.email t@t && git config user.name t', { cwd: repo })
@@ -1195,17 +1198,91 @@ async function testPhase1() {
     writeFileSync(join(repo, 'a.txt'), 'user wip')
     const head = execSync('git rev-parse HEAD && git status --porcelain', { cwd: repo, encoding: 'utf-8' })
     const cps = new Checkpoints(repo, 'test')
-    cps.snapshot('Bash noop')
-    cps.snapshot('Bash change')
+    await cps.snapshot('Bash noop')
+    await cps.snapshot('Bash change')
     writeFileSync(join(repo, 'a.txt'), 'agent')
     unlinkSync(join(repo, 'b.txt'))
     writeFileSync(join(repo, 'c.txt'), 'new')
-    const r = cps.undo()
+    const r = await cps.undo()
     const ok = r.ok && readFileSync(join(repo, 'a.txt'), 'utf-8') === 'user wip' && existsSync(join(repo, 'b.txt')) && !existsSync(join(repo, 'c.txt'))
     const sameGit = execSync('git rev-parse HEAD && git status --porcelain', { cwd: repo, encoding: 'utf-8' }) === head
-    const second = cps.undo() // only the no-op snapshot is left
+    const second = await cps.undo() // only the no-op snapshot is left
     cps.cleanup()
     return ok && sameGit && !second.ok
+  })
+
+  // Each step: snapshot, change, then the after-snapshot query takes once the tool finishes
+  const cpRepo = (name: string) => {
+    const repo = join(TMP_DIR, name)
+    mkdirSync(repo, { recursive: true })
+    writeFileSync(join(repo, 'a.txt'), 'a1\n')
+    writeFileSync(join(repo, '.gitignore'), '.env\n')
+    writeFileSync(join(repo, '.env'), 'SECRET=1\n')
+    execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: repo })
+    return repo
+  }
+  let stepId = 0
+  const step = async (cps: Checkpoints, label: string, paths: string[], change: () => void) => {
+    const id = `s${++stepId}`
+    await cps.snapshot(label, paths, id)
+    change()
+    await cps.afterChange(id)
+  }
+  const text = (repo: string, f: string) => existsSync(join(repo, f)) ? readFileSync(join(repo, f), 'utf-8') : null
+  await test('Undo: a shell step that moved an ignored .env puts it back', async () => {
+    const repo = cpRepo('undo-env')
+    const cps = new Checkpoints(repo, 't1')
+    await step(cps, 'Bash mv .env notes.txt', [], () => execSync('mv .env notes.txt', { cwd: repo }))
+    await cps.undo()
+    return text(repo, '.env') === 'SECRET=1\n' && text(repo, 'notes.txt') === null
+  })
+  await test('Undo: your own edits after a step are left alone', async () => {
+    const repo = cpRepo('undo-user')
+    const cps = new Checkpoints(repo, 't2')
+    await step(cps, 'Write b.txt', ['b.txt'], () => writeFileSync(join(repo, 'b.txt'), 'darce\n'))
+    writeFileSync(join(repo, 'a.txt'), 'mine\n')
+    writeFileSync(join(repo, 'mine.txt'), 'mine\n')
+    const r = await cps.undo()
+    return r.ok && text(repo, 'b.txt') === null && text(repo, 'a.txt') === 'mine\n' && text(repo, 'mine.txt') === 'mine\n'
+  })
+  await test('Undo: a file changed again since the step is kept and reported', async () => {
+    const repo = cpRepo('undo-kept')
+    const cps = new Checkpoints(repo, 't3')
+    await step(cps, 'Edit a.txt', ['a.txt'], () => writeFileSync(join(repo, 'a.txt'), 'darce\n'))
+    writeFileSync(join(repo, 'a.txt'), 'mine\n')
+    const r = await cps.undo()
+    return r.ok && !!r.kept?.includes('a.txt') && text(repo, 'a.txt') === 'mine\n'
+  })
+  await test('Undo: a git commit made by a step is undone (branch, index and files)', async () => {
+    const repo = cpRepo('undo-commit')
+    const head = execSync('git rev-parse HEAD', { cwd: repo, encoding: 'utf-8' })
+    const cps = new Checkpoints(repo, 't4')
+    await step(cps, 'Edit a.txt', ['a.txt'], () => writeFileSync(join(repo, 'a.txt'), 'a2\n'))
+    await step(cps, 'Bash git commit -am wip', [], () => execSync('git commit -qam wip', { cwd: repo }))
+    await cps.undo()
+    const back = execSync('git rev-parse HEAD', { cwd: repo, encoding: 'utf-8' }) === head
+    const status = execSync('git status --porcelain', { cwd: repo, encoding: 'utf-8' })
+    await cps.undo()
+    return back && status === ' M a.txt\n' && text(repo, 'a.txt') === 'a1\n'
+  })
+  await test('Undo: removed files go to the trash, not gone', async () => {
+    const repo = cpRepo('undo-trash')
+    const cps = new Checkpoints(repo, 't5')
+    await step(cps, 'Bash mkdir notes', [], () => { mkdirSync(join(repo, 'notes')); writeFileSync(join(repo, 'notes', 'n.txt'), 'n') })
+    await cps.undo()
+    return !existsSync(join(repo, 'notes')) && readFileSync(join(repo, '.git', 'darce-trash', 't5', '1', 'notes', 'n.txt'), 'utf-8') === 'n'
+  })
+  await test('Undo: outside git, binaries restore byte-exact and shell steps say why they cannot', async () => {
+    const dir = join(TMP_DIR, 'undo-nogit')
+    mkdirSync(dir, { recursive: true })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0xff, 0xfe])
+    writeFileSync(join(dir, 'i.png'), png)
+    const cps = new Checkpoints(dir, 't6')
+    await step(cps, 'Write i.png', ['i.png'], () => writeFileSync(join(dir, 'i.png'), 'text'))
+    await step(cps, 'Bash rm x', [], () => {})
+    const r = await cps.undo()
+    await cps.undo()
+    return !r.ok && /git init/.test(r.reason) && readFileSync(join(dir, 'i.png')).equals(png)
   })
 }
 
@@ -1251,7 +1328,7 @@ async function testPhase2() {
       },
       async listModels() { return [] },
     }
-    const base = new Checkpoints(repo, 'derby').commitWorkingTree('base')!
+    const base = (await new Checkpoints(repo, 'derby').commitWorkingTree('base'))!
     const d = new Derby(repo, base, ['m/one', 'm/two'], () => {})
     await d.run('set value', [], fake as any)
     const untouched = readFileSync(join(repo, 'src', 'a.ts'), 'utf-8') === 'value = 1\n'
@@ -1543,3 +1620,351 @@ runTests().catch(err => {
   console.error('Test runner crashed:', err)
   process.exit(2)
 })
+
+// ============================================================
+// Stability: streaming, tool-call integrity, retries, sessions
+// ============================================================
+
+async function testStability() {
+  const { OpenRouterProvider } = await import('./src/providers/openrouter.js')
+  const { query } = await import('./src/core/query.js')
+  const { repairToolPairs, MISSING_RESULT } = await import('./src/core/conversation.js')
+  const { planSwarm } = await import('./src/core/swarm.js')
+  registerAllTools()
+  const sse = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`
+  const body = (parts: string[]) => new ReadableStream({ start(c) { for (const p of parts) c.enqueue(new TextEncoder().encode(p)); c.close() } })
+  const realFetch = globalThis.fetch
+  async function withFetch<T>(fake: () => Promise<Response>, fn: () => Promise<T>): Promise<T> {
+    globalThis.fetch = fake as typeof fetch
+    try { return await fn() } finally { globalThis.fetch = realFetch }
+  }
+  const streamOf = (parts: string[]) => async () => new Response(body(parts), { status: 200 })
+  const drainQuery = async (parts: string[], extra: Record<string, unknown> = {}) => withFetch(streamOf(parts), async () => {
+    const gen = query({ messages: [{ role: 'user', content: 'go' }], model: 'x/y', provider: new OpenRouterProvider('k'), cwd: TMP_DIR, systemPrompt: 's', readFiles: new Set(), maxTurns: 1, ...extra })
+    const events: StreamEvent[] = []
+    let r = await gen.next()
+    while (!r.done) { events.push(r.value); r = await gen.next() }
+    return { events, result: r.value }
+  })
+  const paired = (msgs: Message[]) => repairToolPairs(msgs) === msgs
+  const toolUse = (id: string): Message => ({ role: 'assistant', content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: 'a' } }] })
+
+  await test('SSE: CRLF-framed events parse', () => {
+    const { frames, remaining } = parseSSEFrames('data: {"a":1}\r\n\r\ndata: [DONE]\r\n\r\ndata: x\r')
+    return frames.length === 2 && frames[1]!.data === '[DONE]' && remaining === 'data: x\r'
+  })
+
+  await test('Stream: a tool call cut off by max tokens gets an error result, never runs', async () => {
+    const { events, result } = await drainQuery([
+      sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'Read', arguments: '{"file_pa' } }] } }] }),
+      sse({ choices: [{ delta: {}, finish_reason: 'length' }] }), 'data: [DONE]\n\n'])
+    const last = result.messages[result.messages.length - 1]!
+    return !events.some(e => e.type === 'tool_executing') && paired(result.messages)
+      && Array.isArray(last.content) && last.content[0]!.type === 'tool_result' && /cut off/.test((last.content[0] as any).content)
+  })
+
+  await test('Stream: a finish chunk with no delta still runs the tool', async () => {
+    const { events, result } = await drainQuery([
+      sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'g1', function: { name: 'Glob', arguments: '{"pattern":"*.nothing"}' } }] } }] }),
+      sse({ choices: [{ finish_reason: 'tool_calls' }] }), 'data: [DONE]\n\n'])
+    return events.some(e => e.type === 'tool_executing' && e.name === 'Glob') && paired(result.messages)
+  })
+
+  await test('Stream: a repeated tool-call id continues the call instead of wiping it', async () => {
+    const { events } = await drainQuery([
+      sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'g2', function: { name: 'Glob', arguments: '{"pattern":' } }] } }] }),
+      sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'g2', function: { arguments: '"*.md"}' } }] } }] }),
+      sse({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }), 'data: [DONE]\n\n'])
+    const ran = events.find(e => e.type === 'tool_executing')
+    return ran?.type === 'tool_executing' && ran.name === 'Glob' && ran.input.pattern === '*.md'
+  })
+
+  await test('Stream: a connection closed before [DONE] is reported', async () => {
+    const { events, result } = await drainQuery([sse({ choices: [{ delta: { content: 'partial' } }] })])
+    return events.some(e => e.type === 'error' && e.error === 'The connection closed mid-answer') && result.reason === 'error' && result.messages.length === 1
+  })
+
+  await test('Stream: an upstream error after some output is surfaced', async () => {
+    const { events, result } = await drainQuery([sse({ choices: [{ delta: { content: 'half' } }] }), sse({ error: { message: 'provider crashed' } }), 'data: [DONE]\n\n'])
+    return events.some(e => e.type === 'error' && e.error.includes('provider crashed')) && result.reason === 'error'
+  })
+
+  await test('Provider: a 502 is retried; an abort during the backoff stops at once', async () => {
+    let calls = 0
+    const ok = [sse({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }), 'data: [DONE]\n\n']
+    const types = await withFetch(async () => (++calls === 1 ? new Response('bad gateway', { status: 502 }) : new Response(body(ok), { status: 200 })), async () => {
+      const out: string[] = []
+      for await (const e of new OpenRouterProvider('k').stream([{ role: 'user', content: 'x' }], 'a/b', [])) out.push(e.type)
+      return out
+    })
+    const ac = new AbortController()
+    setTimeout(() => ac.abort(), 50)
+    const t0 = Date.now()
+    const aborted = await withFetch(async () => new Response('down', { status: 503 }), async () => {
+      const out: string[] = []
+      for await (const e of new OpenRouterProvider('k').stream([{ role: 'user', content: 'x' }], 'a/b', [], ac.signal)) out.push(e.type)
+      return out
+    })
+    return calls === 2 && types.includes('message_complete') && Date.now() - t0 < 1000 && !aborted.includes('error')
+  })
+
+  await test('Query: an interrupt resolves a pending approval as denied', async () => {
+    const ac = new AbortController()
+    setTimeout(() => ac.abort(), 50)
+    const { result } = await drainQuery([
+      sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'w1', function: { name: 'Write', arguments: JSON.stringify({ file_path: join(TMP_DIR, 'never.txt'), content: 'x' }) } }] }, finish_reason: 'tool_calls' }] }), 'data: [DONE]\n\n'],
+      { abortSignal: ac.signal, authorize: () => new Promise(() => {}) })
+    return result.reason === 'aborted' && paired(result.messages) && !existsSync(join(TMP_DIR, 'never.txt'))
+  })
+
+  await test('Query: change hooks are awaited and their failures never fail the tool', async () => {
+    const seen: string[] = []
+    const { events } = await drainQuery([
+      sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'w2', function: { name: 'Write', arguments: JSON.stringify({ file_path: join(TMP_DIR, 'hooked.txt'), content: 'x' }) } }] }, finish_reason: 'tool_calls' }] }), 'data: [DONE]\n\n'],
+      { beforeChange: async () => { await new Promise(r => setTimeout(r, 10)); seen.push('before'); throw new Error('snapshot failed') }, afterChange: () => { seen.push('after') } })
+    const done = events.find(e => e.type === 'tool_result_ready')
+    return seen.join() === 'before,after' && done?.type === 'tool_result_ready' && !done.isError && existsSync(join(TMP_DIR, 'hooked.txt'))
+  })
+
+  await test('Query: a resumed history with an unanswered tool_use is repaired before sending', async () => {
+    let sent: Message[] = []
+    const provider = { async *stream(msgs: Message[]) { sent = msgs; yield { type: 'message_complete' as const, message: { role: 'assistant' as const, content: 'ok' }, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } }, listModels: async () => [] }
+    const broken: Message[] = [{ role: 'user', content: 'a' }, toolUse('t9'), { role: 'user', content: 'b' }]
+    const gen = query({ messages: broken, model: 'x/y', provider, cwd: TMP_DIR, systemPrompt: 's', readFiles: new Set() })
+    let r = await gen.next()
+    while (!r.done) r = await gen.next()
+    const fixed = sent[3]!
+    return Array.isArray(fixed.content) && fixed.content[0]!.type === 'tool_result' && (fixed.content[0] as any).content === MISSING_RESULT
+      && (sent[4]!.content === 'b') && paired(r.value.messages)
+  })
+
+  await test('Compact: shrinks bulky tool output and old images even when the tail alone is over budget', () => {
+    const huge = 'x'.repeat(150_000)
+    const img = { type: 'image' as const, mediaType: 'image/png', data: 'AAAA' }
+    const msgs: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'look' }, img] }]
+    for (let i = 0; i < 4; i++) msgs.push(toolUse('h' + i), { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'h' + i, content: huge }] })
+    msgs.push({ role: 'user', content: [{ type: 'text', text: 'now this' }, img] })
+    const out = compactMessages(msgs)
+    const images = out.flatMap(m => (Array.isArray(m.content) ? m.content : [])).filter(b => b.type === 'image')
+    return estimateMessagesTokens(out) < 100_000 && paired(out) && images.length === 1
+      && out.some(m => Array.isArray(m.content) && m.content.some(b => b.type === 'tool_result' && b.content.includes('[trimmed')))
+  })
+
+  await test('Sessions: atomic writes, an index for listing, corrupt files skipped', async () => {
+    const realHome = process.env.HOME
+    process.env.HOME = join(TMP_DIR, 'session-home')
+    try {
+      const { saveSession, listSessions, loadLatestSession } = await import('./src/state/sessions.js')
+      const dir = join(TMP_DIR, 'session-home', '.darce', 'sessions')
+      saveSession('s1', [{ role: 'user', content: 'fix the login bug please' }], '/proj')
+      await new Promise(r => setTimeout(r, 5))
+      saveSession('s2', [{ role: 'user', content: 'add dark mode toggle' }], '/proj')
+      writeFileSync(join(dir, 's3.json'), '{"sessionId":"s3","cwd":"/proj","savedAt":"9999-01-01T00:00:00.000Z","messages":[{"role":"user","con')
+      const listed = listSessions()
+      const latest = loadLatestSession('/proj')
+      const { readdirSync, unlinkSync: rm } = await import('node:fs')
+      const noTmp = !readdirSync(dir).some(f => f.endsWith('.tmp'))
+      const indexed = existsSync(join(dir, '.index.json'))
+      rm(join(dir, '.index.json'))
+      const rescanned = listSessions().map(s => s.sessionId).join()
+      return listed.map(s => s.sessionId).join() === 's2,s1' && latest?.sessionId === 's2' && noTmp && indexed && rescanned === 's2,s1'
+    } finally {
+      process.env.HOME = realHome
+    }
+  })
+
+  await test('Swarm: the plan carries its usage and the abort signal reaches the provider', async () => {
+    let got: AbortSignal | undefined
+    const provider = {
+      async *stream(_m: Message[], _model: string, _t: unknown[], signal?: AbortSignal) {
+        got = signal
+        yield { type: 'text_delta' as const, text: '{"parts":[{"title":"Do it","prompt":"Change a.ts"}]}' }
+        yield { type: 'message_complete' as const, message: { role: 'assistant' as const, content: '' }, usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }
+      },
+      listModels: async () => [],
+    }
+    const ac = new AbortController()
+    const parts = await planSwarm('task', provider, 'x/y', TMP_DIR, ac.signal)
+    return got === ac.signal && parts.length === 1 && parts.usage.total_tokens === 15
+  })
+}
+
+// ============================================================
+// Tool stability: bounded output, process groups, encodings, risk gaps
+// ============================================================
+
+async function testToolStability() {
+  const { readCapped } = await import('./src/tools/WebFetchTool.js')
+  const timed = async <T>(fn: () => Promise<T>) => { const t = Date.now(); const r = await fn(); return { r, ms: Date.now() - t } }
+
+  await test('Bash: timeout stops the whole process group and says so', async () => {
+    const { r, ms } = await timed(() => BashTool.call({ command: 'sleep 10; echo done', timeout: 800 }, makeCtx()))
+    return ms < 4000 && r.data.timedOut && !r.data.stdout.includes('done') && BashTool.formatResult(r.data).includes('timed out after 0.8s')
+  })
+  await test('Bash: abort stops child processes too', async () => {
+    const ac = new AbortController()
+    setTimeout(() => ac.abort(), 300)
+    const { r, ms } = await timed(() => BashTool.call({ command: 'sleep 10; echo done' }, { ...makeCtx(), abortSignal: ac.signal }))
+    return ms < 4000 && r.data.aborted === true && BashTool.formatResult(r.data).includes('interrupted')
+  })
+  await test('Bash: a background job holding the pipe does not block', async () => {
+    const { r, ms } = await timed(() => BashTool.call({ command: 'sleep 5 & echo started' }, makeCtx()))
+    return ms < 3000 && r.data.stdout.trim() === 'started' && r.data.background === true && BashTool.formatResult(r.data).includes('background')
+  })
+  await test('Bash: endless output is stopped and kept bounded', async () => {
+    const { r, ms } = await timed(() => BashTool.call({ command: 'yes' }, makeCtx()))
+    return ms < 10000 && r.data.overflowed === true && r.data.stdout.length < 40000 && r.data.stdout.includes('truncated')
+  })
+  await test('Bash: multibyte characters survive chunk boundaries', async () => {
+    const r = await BashTool.call({ command: `node -e "const b=Buffer.from('é'.repeat(40000));process.stdout.write(b.subarray(0,65537));setTimeout(()=>process.stdout.write(b.subarray(65537)),50)"` }, makeCtx())
+    return r.data.stdout.length > 1000 && !r.data.stdout.includes('�')
+  })
+
+  const dir = join(TMP_DIR, 'stability'); mkdirSync(join(dir, 'node_modules', 'lib'), { recursive: true }); mkdirSync(join(dir, 'src'), { recursive: true })
+  writeFileSync(join(dir, 'latin1.txt'), Buffer.from('caf\xe9 = 1\nb = 2\n', 'latin1'))
+  writeFileSync(join(dir, 'crlf.txt'), 'x = 1\r\ny = 2\r\n')
+  writeFileSync(join(dir, 'bom.txt'), '﻿hello = 1\n')
+  writeFileSync(join(dir, 'bin.dat'), Buffer.from([0x61, 0, 0x62]))
+  writeFileSync(join(dir, 'wide.txt'), Array.from({ length: 1000 }, (_, i) => `${i}:${'w'.repeat(500)}`).join('\n'))
+  writeFileSync(join(dir, 'min.js'), 'x'.repeat(50000))
+  writeFileSync(join(dir, 'node_modules', 'lib', 'index.js'), 'export const needle = 1\n')
+  writeFileSync(join(dir, 'src', 'flags.txt'), 'use --flag here\n')
+
+  await test('Edit: refuses non-UTF-8 files instead of corrupting them', async () => {
+    const ctx = makeCtx(dir); const before = readFileSync(join(dir, 'latin1.txt'))
+    await ReadTool.call({ file_path: 'latin1.txt' }, ctx)
+    const r = await EditTool.call({ file_path: 'latin1.txt', old_string: 'b = 2', new_string: 'b = 3' }, ctx)
+    return r.isError === true && String(r.data).includes('not UTF-8') && readFileSync(join(dir, 'latin1.txt')).equals(before)
+  })
+  await test('Edit: matches \\n against CRLF files and keeps CRLF', async () => {
+    const ctx = makeCtx(dir); await ReadTool.call({ file_path: 'crlf.txt' }, ctx)
+    const r = await EditTool.call({ file_path: 'crlf.txt', old_string: 'x = 1\ny = 2', new_string: 'x = 9\ny = 9\nz = 9' }, ctx)
+    return !r.isError && readFileSync(join(dir, 'crlf.txt'), 'utf-8') === 'x = 9\r\ny = 9\r\nz = 9\r\n'
+  })
+  await test('Edit: preserves a UTF-8 BOM', async () => {
+    const ctx = makeCtx(dir); await ReadTool.call({ file_path: 'bom.txt' }, ctx)
+    const r = await EditTool.call({ file_path: 'bom.txt', old_string: 'hello = 1', new_string: 'hello = 2' }, ctx)
+    return !r.isError && readFileSync(join(dir, 'bom.txt')).toString('hex') === 'efbbbf' + Buffer.from('hello = 2\n').toString('hex')
+  })
+  await test('Read: binary files, directories and errors are explained', async () => {
+    const ctx = makeCtx(dir)
+    const b = ReadTool.formatResult((await ReadTool.call({ file_path: 'bin.dat' }, ctx)).data)
+    const d = ReadTool.formatResult((await ReadTool.call({ file_path: 'src' }, ctx)).data)
+    const e = ReadTool.formatResult((await ReadTool.call({ file_path: 'missing.txt' }, ctx)).data)
+    return b.includes('binary') && d.includes('is a directory') && e.includes('ENOENT')
+  })
+  await test('Read: long lines and total output are capped with a way to read on', async () => {
+    const ctx = makeCtx(dir)
+    const min = (await ReadTool.call({ file_path: 'min.js' }, ctx)).data
+    const wide = (await ReadTool.call({ file_path: 'wide.txt' }, ctx)).data
+    const next = (await ReadTool.call({ file_path: 'wide.txt', offset: wide.nextOffset }, ctx)).data
+    return min.content.length < 2200 && min.content.includes('line truncated') && wide.content.length <= 100_000
+      && !!wide.nextOffset && ReadTool.formatResult(wide).includes(`offset: ${wide.nextOffset}`) && next.content.startsWith(`${wide.nextOffset}\t`)
+  })
+  await test('Grep: patterns starting with "-" and paths inside node_modules', async () => {
+    const ctx = makeCtx(dir)
+    const flag = await GrepTool.call({ pattern: '--flag' }, ctx)
+    const nm = await GrepTool.call({ pattern: 'needle', path: 'node_modules' }, ctx)
+    const all = await GrepTool.call({ pattern: 'needle' }, ctx)
+    return String(flag.data).includes('flags.txt') && String(nm.data).includes('index.js') && String(all.data) === 'No matches found.'
+  })
+  await test('WebFetch: response bodies are read with a size cap', async () => {
+    let n = 0
+    const endless = new ReadableStream<Uint8Array>({ pull(c) { n++; c.enqueue(new Uint8Array(64 * 1024).fill(97)) } })
+    const r = await readCapped(new Response(endless), 1_000_000)
+    return r.truncated && r.text.length === 1_000_000 && n < 40
+  })
+
+  const R = (c: string) => bashRisk(c, '/repo').level
+  await test('Risk: git ref deletion and rewrites ask; listing stays read-only', () =>
+    R('git tag -d v1') === 2 && R('git branch -f main HEAD~5') === 2 && R('git branch --delete feat') === 2 && R('git branch -d -f feat') === 2 && R('git branch -M a b') === 2
+    && R('git remote set-url origin https://x') === 2 && R('git remote remove origin') === 2 && R('git reflog expire --expire=now --all') === 2
+    && R('git commit --amend -m x') === 2 && R('git rebase main') === 2 && R('git checkout -- .') === 2 && R('git stash drop') === 2
+    && R('git branch -m a b') === 1 && R('git branch feat') === 1 && R('git tag v2') === 1 && R('git remote add up https://x') === 1
+    && R('git branch') === 0 && R('git branch -a') === 0 && R('git branch --contains HEAD') === 0 && R('git tag -l') === 0 && R('git remote -v') === 0 && R('git reflog') === 0
+    && R('git commit -m x') === 1 && R('git add .') === 1 && R('git checkout main') === 1)
+  await test('Risk: remote deletes and mirrors are level 3, outside "always allow git push"', () =>
+    R('git push origin :main') === 3 && R('git push --delete origin main') === 3 && R('git push -d origin main') === 3 && R('git push --mirror') === 3
+    && R('git push -f') === 3 && R('git push origin +main') === 3 && R('git push origin main') === 2 && trustKey('git push origin :main') === 'git push')
+  await test('Risk: "read-only" commands that write files', () =>
+    R('yq -i .a=1 f.yaml') === 1 && R('yq -i .a=1 ~/.config/x.yaml') === 2 && R('yq .a f.yaml') === 0
+    && R('tree -o out.txt') === 1 && R('tree -o ~/.bashrc') === 2 && R('tree -L 2') === 0
+    && R('uniq a.txt b.txt') === 1 && R('uniq a.txt ~/.ssh/authorized_keys') === 2 && R('uniq -c a.txt') === 0 && R('uniq -f 2 a.txt') === 0
+    && R('sort -o out a') === 1)
+}
+
+// ============================================================
+// Startup safety: broken ~/.darcerc, unreachable API, Chrome and server cleanup
+// ============================================================
+
+async function testStartupSafety() {
+  const { readdirSync, rmSync } = await import('node:fs')
+  const { globalRcProblem, saveGlobalSetting } = await import('./src/config/config.js')
+  const { addAccount, removeAccount } = await import('./src/auth/accounts.js')
+  const { saveCredentials } = await import('./src/auth/onboarding.js')
+  const home = join(TMP_DIR, 'home-rc')
+  mkdirSync(home, { recursive: true })
+  const realHome = process.env.HOME
+  process.env.HOME = home
+  try {
+    const rc = join(home, '.darcerc')
+    const bad = '{\n  "apiKey": "k1",\n  "theme": "light",\n}\n'
+    writeFileSync(rc, bad)
+    await test('Config: a broken ~/.darcerc is never overwritten, and is backed up once', () => {
+      const saved = saveGlobalSetting('voice', true)
+      addAccount('a@b.co', 'k2'); removeAccount()
+      let threw = ''
+      try { saveCredentials('k3') } catch (e) { threw = (e as Error).message }
+      const problem = globalRcProblem() ?? ''
+      const copies = readdirSync(home).filter(f => f.startsWith('.darcerc.bad-'))
+      return !saved && readFileSync(rc, 'utf-8') === bad && /isn't valid JSON \(line 4\): fix it or delete it/.test(problem)
+        && threw === problem && copies.length === 1 && readFileSync(join(home, copies[0]!), 'utf-8') === bad
+    })
+    await test('Config: a valid ~/.darcerc keeps its other keys on save', () => {
+      writeFileSync(rc, '{"apiKey":"k1","theme":"light"}')
+      saveGlobalSetting('voice', true)
+      const j = JSON.parse(readFileSync(rc, 'utf-8'))
+      return globalRcProblem() === null && j.apiKey === 'k1' && j.theme === 'light' && j.voice === true
+    })
+  } finally {
+    process.env.HOME = realHome
+  }
+
+  const { callApi, failure, Unreachable } = await import('./src/auth/http.js')
+  const http = await import('node:http')
+  const srv = http.createServer((_q, r) => { r.writeHead(502, { 'Content-Type': 'text/html' }); r.end('<html>Bad gateway</html>') })
+  await new Promise<void>(ok => srv.listen(0, '127.0.0.1', () => ok()))
+  const port = (srv.address() as { port: number }).port
+  await test('Auth: an HTML error page reads as a sentence, not "Unexpected token <"', async () => {
+    const r = await callApi(`http://127.0.0.1:${port}/v1/auth/trial`, { method: 'POST' })
+    return r.status === 502 && /darce\.dev is having trouble \(502\)/.test(failure(r))
+  })
+  srv.close()
+  await test('Auth: an unreachable API is a readable error', async () => {
+    try { await callApi(`http://127.0.0.1:${port}/v1/account`); return false } catch (e) { return e instanceof Unreachable && /^Couldn't reach darce\.dev: /.test((e as Error).message) }
+  })
+
+  const { Browser } = await import('./src/taste/chrome.js')
+  await test('Taste: a Chrome that cannot be spawned rejects instead of crashing, and leaves no profile', async () => {
+    const before = new Set(readdirSync(tmpdir()).filter(f => f.startsWith('darce-chrome-')))
+    const was = process.env.DARCE_CHROME
+    process.env.DARCE_CHROME = TMP_DIR // a folder: spawn fails with EACCES
+    try { await Browser.launch(); return false } catch (e) {
+      await new Promise(r => setTimeout(r, 50))
+      return /Couldn't start/.test((e as Error).message) && readdirSync(tmpdir()).filter(f => f.startsWith('darce-chrome-') && !before.has(f)).length === 0
+    } finally {
+      if (was === undefined) delete process.env.DARCE_CHROME; else process.env.DARCE_CHROME = was
+    }
+  })
+
+  const { startBrain, stopBrain } = await import('./src/brain/server.js')
+  await test('Brain: /brain stop frees the port while a tab is still open', async () => {
+    const url = new URL(await startBrain({ cwd: TMP_DIR, model: () => 'm', gitRoot: () => null, timeline: () => [], stepDiff: async () => [], sessionDiff: async () => [] }))
+    await new Promise<void>(ok => { http.get(`${url.origin}/api/events?t=${url.searchParams.get('t')}`, res => { res.on('data', () => {}); res.on('error', () => {}); ok() }).on('error', () => ok()) })
+    stopBrain()
+    await new Promise(r => setTimeout(r, 200))
+    const net = await import('node:net')
+    return new Promise<boolean>(ok => { const s = net.createServer().once('error', () => ok(false)).listen(Number(url.port), '127.0.0.1', () => s.close(() => ok(true))) })
+  })
+  try { rmSync(home, { recursive: true, force: true }) } catch { /* cleaned with TMP_DIR */ }
+}

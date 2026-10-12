@@ -1,5 +1,6 @@
 import { buildSystemPrompt } from './context.js'
 import type { Provider } from '../providers/provider.js'
+import type { TokenUsage } from '../types.js'
 
 export type SwarmPart = { title: string; prompt: string }
 
@@ -12,9 +13,13 @@ Split the user's task into 2 to 4 parts that can be done at the same time withou
 Reply with JSON only, no prose:
 {"parts":[{"title":"3 to 6 words","prompt":"..."}]}`
 
-/** Ask the model to split a task into independent parts. Throws with a readable message on failure. */
-export async function planSwarm(task: string, provider: Provider, model: string, cwd: string, signal?: AbortSignal): Promise<SwarmPart[]> {
+/**
+ * Ask the model to split a task into independent parts. Throws with a readable message on failure.
+ * The parts carry the planner's token `usage` so the caller can bill it (an array, so older callers still work).
+ */
+export async function planSwarm(task: string, provider: Provider, model: string, cwd: string, signal?: AbortSignal): Promise<SwarmPart[] & { usage: TokenUsage }> {
   let text = ''
+  let usage: TokenUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
   for await (const e of provider.stream(
     [
       { role: 'system', content: `${buildSystemPrompt(cwd)}\n\n${PLANNER}` },
@@ -25,8 +30,10 @@ export async function planSwarm(task: string, provider: Provider, model: string,
     signal,
   )) {
     if (e.type === 'text_delta') text += e.text
+    if (e.type === 'message_complete') usage = e.usage
     if (e.type === 'error') throw new Error(e.error)
   }
+  if (signal?.aborted) throw new Error('Planning was cancelled.')
   const json = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
   let parsed: { parts?: Array<{ title?: unknown; prompt?: unknown }> }
   try { parsed = JSON.parse(json) } catch { throw new Error('The planner did not return a usable plan. Try rephrasing the task.') }
@@ -35,7 +42,7 @@ export async function planSwarm(task: string, provider: Provider, model: string,
     .map(p => ({ title: String(p.title).slice(0, 60), prompt: String(p.prompt) }))
     .slice(0, 4)
   if (!parts.length) throw new Error('The planner returned no parts. Try rephrasing the task.')
-  return parts
+  return Object.assign(parts, { usage })
 }
 
 /** Note each worker gets about the others, so it stays in its lane. */

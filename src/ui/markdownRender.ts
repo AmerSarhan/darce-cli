@@ -63,13 +63,16 @@ function wrap(text: string, width: number, indent: number, firstPrefix = ''): st
     .join('\n')
 }
 
+// Highlighting is skipped while a block is still streaming (re-run every frame) and for very long blocks;
+// untagged blocks are never auto-detected, which tries every language and took up to 350ms a frame
+const HIGHLIGHT_MAX_LINES = 1000
+let plainCode = false
+
 function code(text: string, lang: string | undefined, width: number, indent: number): string {
   const t = theme()
   let body = text
-  if (lang && supportsLanguage(lang)) {
+  if (!plainCode && lang && supportsLanguage(lang) && text.split('\n').length <= HIGHLIGHT_MAX_LINES) {
     try { body = highlight(text, { language: lang, ignoreIllegals: true }) } catch {}
-  } else if (!lang) {
-    try { body = highlight(text, { ignoreIllegals: true }) } catch {}
   }
   const bar = chalk.hex(t.faint)('│ ')
   const pad = ' '.repeat(indent)
@@ -164,7 +167,12 @@ function block(tok: Token, width: number, indent = 0): string {
   }
 }
 
-export function renderTerminalMarkdown(source: string, width: number): string {
+export function renderTerminalMarkdown(source: string, width: number, opts: { live?: boolean } = {}): string {
   const tokens = new Lexer({ gfm: true }).lex(source)
-  return tokens.map(tok => block(tok, width)).filter(s => s !== '').join('\n\n')
+  plainCode = !!opts.live
+  try {
+    return tokens.map(tok => block(tok, width)).filter(s => s !== '').join('\n\n')
+  } finally {
+    plainCode = false
+  }
 }

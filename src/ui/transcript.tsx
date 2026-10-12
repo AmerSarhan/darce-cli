@@ -64,7 +64,7 @@ function formatDuration(ms?: number): string {
 /** Short, honest one-line outcome for a finished tool call. */
 function resultHeadline(item: Extract<TranscriptItem, { kind: 'tool' }>): string {
   const lines = item.result.split('\n').filter(l => l.trim())
-  if (item.isError) return lines[0]?.replace(/^Error:\s*/i, '') ?? 'failed'
+  if (item.isError) return clip(lines[0]?.replace(/^Error:\s*/i, '') ?? 'failed', 200)
   if (item.display?.kind === 'diff') {
     const d = item.display
     return d.created ? `created, ${d.added} line${d.added === 1 ? '' : 's'}` : `+${d.added} −${d.removed}`
@@ -77,12 +77,23 @@ function resultHeadline(item: Extract<TranscriptItem, { kind: 'tool' }>): string
   }
 }
 
+// One line of minified JSON can be megabytes: wrapped, it fills thousands of rows of scrollback
+const clip = (line: string, max: number) => (line.length > max ? `${line.slice(0, max - 1)}…` : line)
+// The full output (Ctrl+O) is capped too: past this it's faster to read the file than scroll
+const EXPANDED_MAX_LINES = 2000
+const EXPANDED_MAX_DIFF = 600
+function expandedText(result: string): string {
+  const lines = result.split('\n')
+  const shown = lines.slice(0, EXPANDED_MAX_LINES).map(l => clip(l, 2000))
+  return lines.length > EXPANDED_MAX_LINES ? [...shown, `… ${lines.length - EXPANDED_MAX_LINES} more lines`].join('\n') : shown.join('\n')
+}
+
 /** Which tools show an output preview, and how many lines. */
 function previewLines(item: Extract<TranscriptItem, { kind: 'tool' }>): string[] {
   if (item.isError) return []
   const max = item.name === 'Bash' ? 8 : item.name === 'Grep' || item.name === 'Glob' ? 5 : 0
   if (!max) return []
-  const lines = item.result.replace(/\n+$/, '').split('\n')
+  const lines = item.result.replace(/\n+$/, '').split('\n').map(l => clip(l, 400))
   if (lines.length <= max) return lines
   // For commands the end of the output (test summary, error) matters most
   return item.name === 'Bash'
@@ -153,7 +164,7 @@ export function TranscriptItemView({ item }: { item: TranscriptItem }) {
           {diff?.taste?.length ? <TasteView findings={diff.taste} /> : null}
           {preview.length > 0 && (
             <Box marginLeft={2} flexDirection="column">
-              {preview.map((l, i) => <Text key={i} color={t.faint}>{l || ' '}</Text>)}
+              {preview.map((l, i) => <Text key={i} color={t.faint} wrap="truncate-end">{l || ' '}</Text>)}
             </Box>
           )}
         </Box>
@@ -166,8 +177,8 @@ export function TranscriptItemView({ item }: { item: TranscriptItem }) {
             ? <Text><Text bold>{item.summary}</Text><Text color={t.faint}>  {item.display.created ? `new file, ${item.display.added} line${item.display.added === 1 ? '' : 's'}` : `+${item.display.added} −${item.display.removed}`}</Text></Text>
             : <Text color={t.muted}>Full output of {item.name} {item.summary}</Text>}
           {item.display?.kind === 'diff'
-            ? <DiffView diff={item.display} maxLines={Infinity} />
-            : <Box marginLeft={2}><Text color={t.faint}>{item.result || '(no output)'}</Text></Box>}
+            ? <DiffView diff={item.display} maxLines={EXPANDED_MAX_DIFF} />
+            : <Box marginLeft={2}><Text color={t.faint}>{expandedText(item.result) || '(no output)'}</Text></Box>}
         </Box>
       )
     case 'receipt':

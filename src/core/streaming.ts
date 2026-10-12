@@ -6,7 +6,8 @@ export type SSEFrame = {
 
 export function parseSSEFrames(buffer: string): { frames: SSEFrame[]; remaining: string } {
   const frames: SSEFrame[] = []
-  const parts = buffer.split('\n\n')
+  // Some proxies frame events with CRLF; a lone trailing \r stays in `remaining` until its \n arrives
+  const parts = buffer.replace(/\r\n/g, '\n').split('\n\n')
 
   // Last part is incomplete — keep as remaining
   const remaining = parts.pop() ?? ''

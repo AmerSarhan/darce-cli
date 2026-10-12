@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { writePrivate } from '../utils/privateFile.js'
+import { readSettingsFile, updateGlobalRc, ConfigFileError } from '../config/config.js'
+import { trace } from '../utils/logger.js'
 
 /**
  * Saved Darce accounts. The active one is mirrored into ~/.darcerc (apiKey/apiBase)
@@ -11,12 +12,13 @@ export type Account = { email: string; apiKey: string; apiBase: string; addedAt:
 type Store = { active?: string; accounts: Record<string, Account> }
 
 const STORE = () => join(homedir(), '.darce', 'accounts.json')
-const RC = () => join(homedir(), '.darcerc')
-
 function load(): Store {
   try {
-    return JSON.parse(readFileSync(STORE(), 'utf-8'))
-  } catch {
+    const s = readSettingsFile(STORE()) as Partial<Store>
+    return { ...s, accounts: s.accounts && typeof s.accounts === 'object' ? s.accounts : {} }
+  } catch (err) {
+    // A broken store was copied to accounts.json.bad-<time>; the active key also lives in ~/.darcerc
+    trace('config_error', { file: 'accounts.json', error: (err as Error).message })
     return { accounts: {} }
   }
 }
@@ -25,17 +27,22 @@ function save(store: Store) {
   writePrivate(STORE(), JSON.stringify(store, null, 2))
 }
 
+// Called from synchronous UI commands, so a broken ~/.darcerc is left alone (and reported at launch) rather than thrown
 function writeRc(account: Account | null) {
-  let rc: Record<string, unknown> = {}
-  try { if (existsSync(RC())) rc = JSON.parse(readFileSync(RC(), 'utf-8')) } catch {}
-  if (account) {
-    rc.apiKey = account.apiKey
-    rc.apiBase = account.apiBase
-  } else {
-    delete rc.apiKey
-    delete rc.apiBase
+  try {
+    updateGlobalRc(rc => {
+      if (account) {
+        rc.apiKey = account.apiKey
+        rc.apiBase = account.apiBase
+      } else {
+        delete rc.apiKey
+        delete rc.apiBase
+      }
+    })
+  } catch (err) {
+    if (!(err instanceof ConfigFileError)) throw err
+    trace('config_error', { file: '.darcerc', error: err.message })
   }
-  writePrivate(RC(), JSON.stringify(rc, null, 2) + '\n')
 }
 
 export function listAccounts(): { active?: string; accounts: Account[] } {

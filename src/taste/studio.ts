@@ -491,6 +491,7 @@ export async function startStudio(src: StudioSource, target = ''): Promise<strin
 
 export function stopStudio() {
   running?.server.close()
+  running?.server.closeAllConnections()
   running = null
 }
 
@@ -551,7 +552,8 @@ export function openStudioWindow(url: string, fallback: (url: string) => void) {
     const app = chrome.split('/Contents/')[0]!
     execFile('open', ['-na', app, '--args', ...args], err => { if (err) fallback(url) })
   } else {
-    try { spawn(chrome, args, { detached: true, stdio: 'ignore' }).unref() } catch { fallback(url) }
+    // spawn reports most failures (EACCES, ENOENT) as an 'error' event, which crashes the app unheard
+    try { spawn(chrome, args, { detached: true, stdio: 'ignore' }).on('error', () => fallback(url)).unref() } catch { fallback(url) }
   }
 }
 

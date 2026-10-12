@@ -64,7 +64,7 @@ export function ModelPicker({ currentModel, onSelect, onClose }: Props) {
   const visible = rows.slice(top, top + VISIBLE)
 
   useInput((ch, key) => {
-    if (key.escape) { onClose(); return }
+    if (key.escape || (key.ctrl && ch === 'c')) { onClose(); return }
     if (key.return) {
       const r = rows[rowIndex]
       if (r?.kind === 'model') onSelect(r.model.id)

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useReducer, useEffect, useMemo } from 'react'
-import { Box, Static, Text, useInput, usePaste, useApp, useStdout } from 'ink'
+import { Box, Static, Text, useInput, usePaste, useApp, useStdout, useWindowSize, type Key } from 'ink'
 import { homedir } from 'node:os'
 import { Prompt } from './Prompt.js'
 import { StatusBar } from './StatusBar.js'
@@ -8,7 +8,7 @@ import { Markdown } from './Markdown.js'
 import { Spinner } from './Spinner.js'
 import { useAppState } from './App.js'
 import { theme } from './theme.js'
-import { splitStable, closeOpenFence } from './markdownStream.js'
+import { splitStable, closeOpenFence, liveWindow } from './markdownStream.js'
 import { editorReducer, emptyEditor } from './input/editor.js'
 import { intentFor } from './input/keys.js'
 import { TranscriptItemView, newId, toolSummary, type TranscriptItem } from './transcript.js'
@@ -30,7 +30,7 @@ import { Checkpoints } from '../core/checkpoints.js'
 import { trustedKeys, addTrust } from '../state/trust.js'
 import { setTitle, setProgress, notify } from './termfx.js'
 import type { PermissionMode, ToolDisplay } from '../types.js'
-import { resolve as resolvePath } from 'node:path'
+import { resolve as resolvePath, isAbsolute, relative } from 'node:path'
 import { Receipt, type ReceiptData } from './Receipt.js'
 import { Tape } from './Tape.js'
 import { DerbyBoard } from './DerbyBoard.js'
@@ -59,7 +59,7 @@ import { clipboardImage, imagePathFrom, attachmentFromFile, toBase64, type Attac
 import { getModelProfile, recordModelUse } from '../config/models.js'
 import { predictNext, DEFAULT_SUGGEST_MODEL } from '../core/suggest.js'
 import type { ImageContent } from '../types.js'
-import { getTotalCost, getTotalTokens } from '../state/costTracker.js'
+import { addUsage, getTotalCost, getTotalTokens } from '../state/costTracker.js'
 import type { FileDiff } from '../utils/diff.js'
 import { saveGlobalSetting } from '../config/config.js'
 import { WHY_NOTE, wantsWhy } from '../core/context.js'
@@ -129,6 +129,17 @@ export function itemsFromMessages(messages: Message[]): TranscriptItem[] {
   return items
 }
 
+/** The file list under "Undid:" / "Rewound to before:", plus anything left alone and why. */
+function undoLines(r: { restored: string[]; removed: string[]; kept?: string[]; notes?: string[] }, root: string, git: boolean): string {
+  const show = (f: string) => (isAbsolute(f) ? relative(root, f) || f : f)
+  const lines = [...r.restored.map(f => `restored ${show(f)}`), ...r.removed.map(f => `removed ${show(f)}`)]
+  const out = lines.length ? lines.map(l => `  ${l}`) : r.notes?.length || r.kept?.length ? [] : ['  no file changes']
+  if (r.kept?.length) out.push(`  left as is (changed again after Darce's step): ${[...new Set(r.kept.map(show))].join(', ')}`)
+  for (const n of r.notes ?? []) out.push(`  ${n}`)
+  if (r.removed.length) out.push(git ? '  (removed files are kept in .git/darce-trash for 7 days)' : '  (removed files are kept in darce-trash in your temp folder)')
+  return out.join('\n')
+}
+
 export function REPL({ provider, initialPrompt, restored }: Props) {
   const { state, setState } = useAppState()
   const { exit } = useApp()
@@ -161,7 +172,15 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setItems(prev => [...initial, ...prev])
   }, [introDone, restored, state.sessionId])
   const [staticKey, setStaticKey] = useState(0)
-  const [editor, dispatch] = useReducer(editorReducer, undefined, () => emptyEditor(loadHistory()))
+  const [editor, rawDispatch] = useReducer(editorReducer, undefined, () => emptyEditor(loadHistory()))
+  // Several key events can arrive before React re-renders (a slow frame, SSH, dictation): the ref always
+  // holds the latest text, so a submit right after typing doesn't read the previous render's state
+  const editorRef = useRef(editor)
+  const { rows } = useWindowSize()
+  const dispatch = useCallback((action: Parameters<typeof editorReducer>[1]) => {
+    editorRef.current = editorReducer(editorRef.current, action)
+    rawDispatch(action)
+  }, [])
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   busyRef.current = busy
@@ -175,7 +194,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [pending, setPending] = useState<Pending | null>(null)
   const pendingRef = useRef<Pending | null>(null)
   pendingRef.current = pending
-  const [tape, setTape] = useState<{ index: number; preview: FileDiff[] | null } | null>(null)
+  const [tape, setTape] = useState<{ index: number; preview: FileDiff[] | null | undefined } | null>(null)
   const [derby, setDerby] = useState<{ d: Derby; task: string; selected: number; finished: boolean; variant?: 'derby' | 'swarm' } | null>(null)
   const [, setDerbyTick] = useState(0)
   const [criticOn, setCriticOn] = useState(!!state.config.critic)
@@ -285,7 +304,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
 
   useEffect(() => {
     const cps = checkpointsRef.current!
-    cps.markBaseline()
+    // In the background: hashing a big repo's untracked files must not hold up the first screen
+    void cps.markBaseline()
     setTitle('darce')
     return () => cps.cleanup()
   }, [])
@@ -407,6 +427,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setTitle('darce · working')
     setProgress('busy')
 
+    let approvalQueue: Promise<unknown> = Promise.resolve()
     const authorize = async (call: { id: string; name: string; input: Record<string, unknown> }, origin?: string) => {
       let risk = toolRisk(call.name, call.input, state.cwd)
       receipt.maxRisk = Math.max(receipt.maxRisk, risk.level) as ReceiptData['maxRisk']
@@ -429,8 +450,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       if (Date.now() - startedAt > 10_000) notify('Darce needs approval', `${call.name} ${toolSummary(call.name, call.input)}`)
       brain.emit('ask', { command: call.name === 'Bash' ? String(call.input.command ?? '') : `${call.name} ${toolSummary(call.name, call.input)}`, reason: risk.reason })
       voice?.say('ask', voiceContext(`Darce is waiting for approval to run: ${call.name === 'Bash' ? String(call.input.command ?? '') : `${call.name} ${toolSummary(call.name, call.input)}`} (${risk.reason})`))
-      setActivity(null)
-      return new Promise<{ allow: true; via?: string } | { allow: false; reason: string }>(resolveDecision => {
+      type Decision = { allow: true; via?: string } | { allow: false; reason: string }
+      const stopped: Decision = { allow: false, reason: 'the user stopped the task.' }
+      // Parallel threads can ask at the same time: one prompt on screen, the rest wait their turn
+      const ask = () => new Promise<Decision>(resolveDecision => {
+        if (controller.signal.aborted) { resolveDecision(stopped); return }
+        setActivity(null)
+        const onAbort = () => { setPending(null); resolveDecision(stopped) }
+        controller.signal.addEventListener('abort', onAbort, { once: true })
         setPending({
           req: {
             id: call.id,
@@ -443,19 +470,25 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
             trustKey: key && risk.level < 3 ? key : undefined,
           },
           resolve: d => {
+            controller.signal.removeEventListener('abort', onAbort)
             setPending(null)
             setActivity({ label: 'Thinking', startedAt: Date.now() })
             resolveDecision(d)
           },
         })
       })
+      const turn = approvalQueue.then(ask)
+      approvalQueue = turn.catch(() => stopped)
+      return turn
     }
 
-    const beforeChange = (call: { id: string; name: string; input: Record<string, unknown> }) => {
+    const beforeChange = async (call: { id: string; name: string; input: Record<string, unknown> }) => {
       const paths = call.input.file_path ? [String(call.input.file_path)] : []
-      checkpointsRef.current?.snapshot(`${call.name} ${toolSummary(call.name, call.input)}`, paths, call.id)
+      const label = call.name === 'Bash' ? `Bash ${String(call.input.command ?? '')}` : `${call.name} ${toolSummary(call.name, call.input)}`
+      await checkpointsRef.current?.snapshot(label.length > 200 ? label.slice(0, 199) + '…' : label, paths, call.id, call.name === 'Bash')
       brain.emit('checkpoint')
     }
+    const afterChange = async (call: { id: string }) => { await checkpointsRef.current?.afterChange(call.id) }
 
     // Threads started by the Agent tool: explore threads run side by side, work threads one at a time
     const spawnAgent = async (req: SpawnRequest) => {
@@ -468,7 +501,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       bumpThreads()
       const run = () => runThread({
         thread: t, prompt: req.prompt, cwd: state.cwd, provider, passEnv: state.config.passEnv, signal: controller.signal,
-        authorize: call => authorize(call, `thread ${t.id}: ${t.title}`), beforeChange, onUpdate: bumpThreads,
+        authorize: call => authorize(call, `thread ${t.id}: ${t.title}`), beforeChange, afterChange, onUpdate: bumpThreads,
       })
       await (req.kind === 'work' ? workMutexRef.current.run(run) : run())
       if (t.status === 'done') return { report: t.report }
@@ -488,6 +521,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         passEnv: state.config.passEnv,
         authorize,
         beforeChange,
+        afterChange,
         spawnAgent,
       })
 
@@ -631,7 +665,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       })
       if (steps > 0) {
         // In a git repo the checkpoints know everything this turn changed, shell commands included
-        const actual = checkpointsRef.current?.diffSince(checkpointsAtStart)
+        const actual = await checkpointsRef.current?.diffSince(checkpointsAtStart)
         receipt.files = actual
           ? actual.filter(d => d.added || d.removed || d.created).map(d => ({ path: d.path, added: d.added, removed: d.removed, created: !!d.created }))
           : [...fileStats.values()]
@@ -673,14 +707,15 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const cps = checkpointsRef.current!
     if (cps.count === 0) { flashHint('Nothing to rewind yet: Darce has not changed anything this session.'); return }
     const index = cps.count - 1
-    setTape({ index, preview: cps.stepDiff(index) })
+    setTape({ index, preview: undefined })
+    void cps.stepDiff(index).then(preview => setTape(t => t && t.index === index ? { index, preview } : t))
   }, [flashHint])
 
-  const rewindTo = useCallback((index: number) => {
+  const rewindTo = useCallback(async (index: number) => {
     const cps = checkpointsRef.current!
     const cp = cps.list()[index]
     if (!cp) return
-    const r = cps.rewindTo(index)
+    const r = await cps.rewindTo(index)
     setTape(null)
     if (!r.ok) { commit({ kind: 'error', id: newId(), text: r.reason }); return }
     // Cut the conversation back to before the message that made this step
@@ -690,8 +725,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     }
     if (cut >= 0) messagesRef.current = messagesRef.current.slice(0, cut)
     setContextTokens(estimateMessagesTokens(messagesRef.current))
-    const files = [...r.restored.map(f => `restored ${f}`), ...r.removed.map(f => `removed ${f}`)]
-    commit({ kind: 'system', id: newId(), text: `Rewound to before: ${cp.label}\n${files.length ? files.map(f => `  ${f}`).join('\n') : '  no file changes'}${cut >= 0 ? '\nThe conversation was rewound to the same point.' : ''}` })
+    commit({ kind: 'system', id: newId(), text: `Rewound to before: ${cp.label}\n${undoLines(r, cps.gitRoot ?? state.cwd, !!cps.gitRoot)}${cut >= 0 ? '\nThe conversation was rewound to the same point.' : ''}` })
     notesRef.current.push(`the user rewound the project to before your step "${cp.label}"`)
   }, [commit])
 
@@ -703,7 +737,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (!rest) { commit({ kind: 'system', id: newId(), text: 'Usage: /derby [--models a,b,c] <task>\nRaces up to 3 models on the task, each in its own git worktree. Your files are untouched until you pick a winner.' }); return }
     if (modeRef.current === 'plan') { commit({ kind: 'system', id: newId(), text: '/derby makes changes, and plan mode is read-only. Switch mode with Shift+Tab first.' }); return }
     const cps = checkpointsRef.current!
-    const base = cps.commitWorkingTree('darce derby base')
+    const base = await cps.commitWorkingTree('darce derby base')
     if (!base || !cps.gitRoot) { commit({ kind: 'system', id: newId(), text: '/derby needs a git repository: each model works in its own worktree.' }); return }
     const racers = (models ?? defaultRacers(modelRef.current, state.config.derbyModels)).slice(0, 3)
     commit({ kind: 'user', id: newId(), text: `/derby ${rest}` })
@@ -721,7 +755,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setDerby(prev => prev && { ...prev, finished: true, selected: best >= 0 ? best : 0 })
   }, [commit, provider, state.config.derbyModels, state.config.passEnv])
 
-  const finishDerby = useCallback((applyIndex: number | null) => {
+  const finishDerby = useCallback(async (applyIndex: number | null) => {
     if (!derby) return
     const { d, task } = derby
     if (applyIndex !== null && !d.racers[applyIndex]!.diffs.length) {
@@ -733,7 +767,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       setContextTokens(estimateMessagesTokens(messagesRef.current))
     } else if (applyIndex !== null) {
       const r = d.racers[applyIndex]!
-      checkpointsRef.current!.snapshot(`Derby: apply ${r.model.split('/').pop()}`)
+      await checkpointsRef.current!.snapshot(`Derby: apply ${r.model.split('/').pop()}`)
       const { files } = d.apply(applyIndex)
       commit({ kind: 'system', id: newId(), text: `Applied ${r.model}'s result: ${files} file${files === 1 ? '' : 's'} changed ($${r.cost.toFixed(4)}, ${Math.round(r.ms / 1000)}s). /undo reverts it.` })
       for (const diff of r.diffs) commit({ kind: 'expanded', id: newId(), name: diff.created ? 'new file' : 'changed', summary: diff.path, result: '', display: diff })
@@ -763,16 +797,23 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setTitle('darce · swarm')
     setActivity({ label: 'Planning the swarm', startedAt: Date.now() })
     let parts: SwarmPart[]
+    // Esc / Ctrl+C stop the planning call too
+    const planning = new AbortController()
+    abortRef.current = planning
     try {
-      parts = await planSwarm(task, provider, modelRef.current, state.cwd)
+      const plan = await planSwarm(task, provider, modelRef.current, state.cwd, planning.signal)
+      if (plan.usage) addUsage(modelRef.current, plan.usage)
+      parts = plan
     } catch (err) {
       setActivity(null); setBusy(false); setTitle('darce')
-      commit({ kind: 'system', id: newId(), text: `Couldn't plan the swarm: ${(err as Error).message}` })
+      commit({ kind: 'system', id: newId(), text: planning.signal.aborted ? 'Swarm stopped before it started.' : `Couldn't plan the swarm: ${(err as Error).message}` })
       return
+    } finally {
+      if (abortRef.current === planning) abortRef.current = null
     }
     setActivity(null)
     commit({ kind: 'system', id: newId(), text: `Swarm plan: ${parts.length} thread${parts.length === 1 ? '' : 's'}\n${parts.map((p, i) => `  ${i + 1}. ${p.title}`).join('\n')}` })
-    const base = cps.commitWorkingTree('darce swarm base')
+    const base = await cps.commitWorkingTree('darce swarm base')
     if (!base) { setBusy(false); setTitle('darce'); commit({ kind: 'system', id: newId(), text: 'Couldn\'t snapshot your working tree for the swarm.' }); return }
     const workers = parts.map((p, i) => ({ model: modelRef.current, task: p.prompt, title: p.title, context: laneNote(parts, i) }))
     const d = new Derby(cps.gitRoot, base, workers, () => setDerbyTick(n => n + 1))
@@ -794,11 +835,11 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setDerby(prev => prev && { ...prev, finished: true })
   }, [commit, provider, state.cwd, state.config.passEnv])
 
-  const finishSwarm = useCallback((merge: boolean) => {
+  const finishSwarm = useCallback(async (merge: boolean) => {
     if (!derby) return
     const { d, task } = derby
     if (merge) {
-      checkpointsRef.current!.snapshot(`Swarm: ${task.slice(0, 40)}`)
+      await checkpointsRef.current!.snapshot(`Swarm: ${task.slice(0, 40)}`)
       const { files, merged, conflicts } = d.applyAll()
       const done = d.racers.filter(r => r.status === 'done')
       const lines = [`Merged ${done.length} thread${done.length === 1 ? '' : 's'}: ${files} file${files === 1 ? '' : 's'} changed${merged.length ? `, ${merged.length} combined from several threads` : ''}. /undo reverts the whole swarm.`]
@@ -862,22 +903,24 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (result === '__MODEL_PICKER__') { setShowPicker(true); return }
     if (result === '__UNDO__') {
       commit({ kind: 'user', id: newId(), text })
-      const r = checkpointsRef.current!.undo()
-      if (!r.ok) { commit({ kind: 'system', id: newId(), text: r.reason }); return }
-      const files = [...r.restored.map(f => `restored ${f}`), ...r.removed.map(f => `removed ${f}`)]
-      commit({ kind: 'system', id: newId(), text: `Undid: ${r.label}\n${files.length ? files.map(f => `  ${f}`).join('\n') : '  no file changes'}\n${checkpointsRef.current!.count} earlier change(s) can still be undone.` })
-      notesRef.current.push(`the user undid your change "${r.label}" — those files are back to how they were before it`)
+      const cps = checkpointsRef.current!
+      void cps.undo().then(r => {
+        if (!r.ok) { commit({ kind: 'system', id: newId(), text: r.reason }); return }
+        commit({ kind: 'system', id: newId(), text: `Undid: ${r.label}\n${undoLines(r, cps.gitRoot ?? state.cwd, !!cps.gitRoot)}\n${cps.count} earlier change(s) can still be undone.` })
+        notesRef.current.push(`the user undid your change "${r.label}" — those files are back to how they were before it${r.kept?.length ? ` (except ${r.kept.length} file(s) changed again since, which were left as they are)` : ''}`)
+      })
       return
     }
     if (result === '__DIFF__') {
       commit({ kind: 'user', id: newId(), text })
-      const diffs = checkpointsRef.current!.sessionDiff()
-      if (diffs === null) { commit({ kind: 'system', id: newId(), text: '/diff needs a git repository. /undo still works for Edit and Write.' }); return }
-      if (diffs.length === 0) { commit({ kind: 'system', id: newId(), text: 'No files have changed since this session started.' }); return }
-      const added = diffs.reduce((n, d) => n + d.added, 0)
-      const removed = diffs.reduce((n, d) => n + d.removed, 0)
-      commit({ kind: 'system', id: newId(), text: `${diffs.length} file(s) changed this session, +${added} −${removed}` })
-      for (const d of diffs) commit({ kind: 'expanded', id: newId(), name: d.created ? 'new file' : 'changed', summary: d.path, result: '', display: d })
+      void checkpointsRef.current!.sessionDiff().then(diffs => {
+        if (diffs === null) { commit({ kind: 'system', id: newId(), text: '/diff needs a git repository. /undo still works for Edit and Write.' }); return }
+        if (diffs.length === 0) { commit({ kind: 'system', id: newId(), text: 'No files have changed since this session started.' }); return }
+        const added = diffs.reduce((n, d) => n + d.added, 0)
+        const removed = diffs.reduce((n, d) => n + d.removed, 0)
+        commit({ kind: 'system', id: newId(), text: `${diffs.length} file(s) changed this session, +${added} −${removed}` })
+        for (const d of diffs) commit({ kind: 'expanded', id: newId(), name: d.created ? 'new file' : 'changed', summary: d.path, result: '', display: d })
+      })
       return
     }
     if (result === '__REWIND__') { openTape(); return }
@@ -1156,10 +1199,23 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     }
   }, [initialPrompt, introDone, runQuery])
 
-  useInput((input, key) => {
+  const onInput = (input: string, key: Key): void => {
+    // Text and Enter delivered in one event ("fix the bug\r") would insert a newline instead of sending
+    if (input.length > 1 && input.includes('\r') && !key.ctrl && !key.meta && !input.startsWith('\x1b')) {
+      const parts = input.split('\r')
+      parts.forEach((part, i) => {
+        if (part) onInput(part, { ...key, return: false })
+        if (i < parts.length - 1) onInput('', { ...key, return: true })
+      })
+      return
+    }
+    const editor = editorRef.current
     if (tape) {
       const cps = checkpointsRef.current!
-      const move = (i: number) => setTape({ index: i, preview: cps.stepDiff(i) })
+      const move = (i: number) => {
+        setTape({ index: i, preview: undefined })
+        void cps.stepDiff(i).then(preview => setTape(t => t && t.index === i ? { index: i, preview } : t))
+      }
       if (key.leftArrow) move(Math.max(0, tape.index - 1))
       else if (key.rightArrow) move(Math.min(cps.count - 1, tape.index + 1))
       else if (key.return) rewindTo(tape.index)
@@ -1221,13 +1277,15 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       }
     }
     if (pending) {
-      const lower = input.toLowerCase()
+      // First key only: "y" and a stray second key can arrive together
+      const lower = input.toLowerCase().slice(0, 1)
       if (lower === 'y') pending.resolve({ allow: true, via: 'approved by you' })
       else if (lower === 'a' && pending.req.trustKey) {
         addTrust(state.cwd, pending.req.trustKey)
         pending.resolve({ allow: true, via: `always allow "${pending.req.trustKey}"` })
       } else if (lower === 'n') pending.resolve({ allow: false, reason: 'the user denied this action. Ask what they would like instead, or try a safer approach.' })
       else if (key.escape || (key.ctrl && input === 'c')) {
+        if (key.ctrl) lastCtrlC.current = Date.now()
         pending.resolve({ allow: false, reason: 'the user denied this action and stopped the task.' })
         abortRef.current?.abort()
         setQueue([])
@@ -1244,8 +1302,12 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     switch (intent.kind) {
       case 'interrupt':
         if (busy) {
+          // A second Ctrl+C always gets you out, even if a step won't stop
+          if (Date.now() - lastCtrlC.current < 1500) { exit(); return }
+          lastCtrlC.current = Date.now()
           abortRef.current?.abort()
           setQueue([])
+          flashHint('Stopping. Press Ctrl+C again to exit', 1500)
           return
         }
         if (editor.text) {
@@ -1342,7 +1404,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         dispatch(intent.action)
         return
     }
-  }, { isActive: !showPicker && !showSessions })
+  }
+  useInput(onInput, { isActive: !showPicker && !showSessions })
 
   usePaste(text => {
     // Dragging image files into the terminal pastes their paths — turn them into attachments
@@ -1368,7 +1431,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
 
   return (
     <>
-      <Static key={staticKey} items={items}>
+      {/* Static only prints new items at the end: hold everything until the welcome card is first in line */}
+      <Static key={staticKey} items={introDone ? items : []}>
         {item => <TranscriptItemView key={item.id} item={item} />}
       </Static>
 
@@ -1376,7 +1440,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         {!introDone ? <Intro onDone={finishIntro} ready={accountReady} /> : null}
         {tail ? (
           <Box marginBottom={1}>
-            <Markdown text={closeOpenFence(tail)} />
+            <Markdown text={liveWindow(closeOpenFence(tail), Math.max(8, (rows || 40) - 14))} live />
           </Box>
         ) : null}
 

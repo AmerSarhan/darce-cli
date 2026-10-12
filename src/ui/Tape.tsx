@@ -14,7 +14,7 @@ function clock(ms: number): string {
  * The Scrubber Tape: every change Darce made this session as a strip of frames.
  * ←/→ scrubs, the preview shows what that step changed, Enter rewinds to before it.
  */
-export function Tape({ frames, index, preview }: { frames: TapeFrame[]; index: number; preview: FileDiff[] | null }) {
+export function Tape({ frames, index, preview }: { frames: TapeFrame[]; index: number; preview: FileDiff[] | null | undefined }) {
   const t = theme()
   const { columns } = useWindowSize()
   const width = Math.max(40, (columns || 80) - 4)

@@ -1,13 +1,58 @@
-import type { Message } from '../types.js'
+import type { Message, ContentBlock, ToolUseContent } from '../types.js'
 import { estimateMessagesTokens } from '../utils/tokens.js'
 
 const MAX_CONTEXT_TOKENS = 100000  // Compact when over this
+const TRIM_KEEP = 2048  // chars kept at each end of a trimmed tool result
 
 export function shouldCompact(messages: Message[]): boolean {
   return estimateMessagesTokens(messages) > MAX_CONTEXT_TOKENS
 }
 
+/** Index of the user's latest typed message (tool results don't count). */
+function lastUserTurn(messages: Message[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i]!.role === 'user' && !isToolResult(messages[i]!)) return i
+  return -1
+}
+
+function trimMiddle(text: string): string {
+  if (text.length <= TRIM_KEEP * 2 + 200) return text
+  return `${text.slice(0, TRIM_KEEP)}\n[trimmed ${text.length - TRIM_KEEP * 2} characters]\n${text.slice(-TRIM_KEEP)}`
+}
+
+/** Shrink bulky blocks in place of dropping messages; tool_use/tool_result ids are untouched. */
+function slim(m: Message, trimResults: boolean, dropImages: boolean): Message {
+  if (!Array.isArray(m.content) || (!trimResults && !dropImages)) return m
+  let changed = false
+  const content = m.content.map((b): ContentBlock => {
+    if (trimResults && b.type === 'tool_result') {
+      const text = trimMiddle(b.content)
+      if (text !== b.content) { changed = true; return { ...b, content: text } }
+    }
+    if (dropImages && b.type === 'image') {
+      changed = true
+      return { type: 'text', text: `\n[Image${b.name ? ` ${b.name}` : ''} removed to save context]` }
+    }
+    return b
+  })
+  return changed ? { ...m, content } : m
+}
+
+function slimAll(messages: Message[], trimBefore: number): Message[] {
+  const turn = lastUserTurn(messages)
+  return messages.map((m, i) => slim(m, i < trimBefore, i < turn))
+}
+
 export function compactMessages(messages: Message[]): Message[] {
+  // Old tool output and images go first: often enough on its own, and nothing is lost from the thread
+  const wasOver = shouldCompact(messages)
+  const slimmed = slimAll(messages, messages.length - 6)
+  if (wasOver && !shouldCompact(slimmed)) return slimmed
+  const out = dropMiddle(slimmed)
+  // Still too big: the kept tail itself is bulky
+  return shouldCompact(out) ? slimAll(out, out.length) : out
+}
+
+function dropMiddle(messages: Message[]): Message[] {
   // Keep: first message (user's original request), last 6 messages (recent context)
   // Summarize everything in between as a system message
   if (messages.length <= 8) return messages
@@ -45,6 +90,31 @@ export function safeStart(messages: Message[], start: number): number {
   let i = Math.max(0, start)
   while (i > 0 && isToolResult(messages[i]!)) i--
   return i
+}
+
+export const MISSING_RESULT = 'No result: this tool call was interrupted before it ran.'
+
+/**
+ * Give every tool_use a tool_result in the messages right after it. A history without one is
+ * rejected by every provider, so a session saved that way (crash, cut-off call) would never recover.
+ */
+export function repairToolPairs(messages: Message[]): Message[] {
+  let out: Message[] | null = null
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!
+    const uses = m.role === 'assistant' && Array.isArray(m.content) ? m.content.filter((b): b is ToolUseContent => b.type === 'tool_use') : []
+    let j = i + 1
+    const answered = new Set<string>()
+    while (uses.length && j < messages.length && isToolResult(messages[j]!)) {
+      for (const b of messages[j]!.content as ContentBlock[]) if (b.type === 'tool_result') answered.add(b.tool_use_id)
+      j++
+    }
+    const missing = uses.filter(u => !answered.has(u.id))
+    if (missing.length) out ??= messages.slice(0, i)
+    out?.push(...messages.slice(i, j), ...missing.map((u): Message => ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: u.id, content: MISSING_RESULT, is_error: true }] })))
+    i = j - 1
+  }
+  return out ?? messages
 }
 
 /** Keep roughly the last `keep` messages, cutting only at a safe boundary. */

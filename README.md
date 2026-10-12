@@ -44,7 +44,7 @@ To install it for good: `npm install -g darce-cli`, then run `darce` in any proj
 
 ## Why people switch to Darce
 
-**🔁 Let it run, because everything comes back.** Most agents can undo their own file edits. Darce snapshots your project before every step, so `/undo` also reverses what its shell commands did: a folder `rm` deleted, a file `mv` moved, a lockfile an install rewrote. `/rewind` (or Esc twice) scrubs back to any earlier point. Your branch, index and stash are never touched.
+**🔁 Let it run, because everything comes back.** Most agents can undo their own file edits. Darce snapshots your project before every step, so `/undo` also reverses what its shell commands did: a folder `rm` deleted, a file `mv` moved, a lockfile an install rewrote. `/rewind` (or Esc twice) scrubs back to any earlier point. Undo only reverses what Darce did: edits you made in between stay, a commit Darce made is taken back off your branch, and removed files go to `.git/darce-trash` rather than disappearing.
 
 **✋ It only stops you when it matters.** Every command is scored before it runs. If `/undo` can reverse it, it just runs. Deploys, migrations, `git push` and anything outside your project wait for a yes, with the reason shown. Scripts with harmless names get read first.
 

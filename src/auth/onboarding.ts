@@ -1,9 +1,7 @@
-import { writeFileSync, existsSync, readFileSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { addAccount } from './accounts.js'
 import { browserLogin } from './browserLogin.js'
-import { writePrivate } from '../utils/privateFile.js'
+import { callApi, failure } from './http.js'
+import { updateGlobalRc } from '../config/config.js'
 
 const API_BASE = process.env.DARCE_API_BASE || 'https://api.darce.dev'
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -66,28 +64,26 @@ function createPrompter() {
 
 async function callAuth(endpoint: 'login' | 'register', email: string, password: string): Promise<AuthResult> {
   try {
-    const res = await fetch(`${API_BASE}/v1/auth/${endpoint}`, {
+    const r = await callApi(`${API_BASE}/v1/auth/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     })
-    const data = await res.json().catch(() => ({})) as { api_key?: string; message?: string; error?: string }
-    if (res.ok && data.api_key) return { ok: true, apiKey: data.api_key }
-    return { ok: false, status: res.status, message: data.message || data.error || `Request failed (${res.status})` }
-  } catch {
-    return { ok: false, status: 0, message: "Couldn't reach darce.dev — check your internet connection." }
+    if (r.ok && typeof r.data.api_key === 'string') return { ok: true, apiKey: r.data.api_key }
+    return { ok: false, status: r.status, message: failure(r) }
+  } catch (err) {
+    return { ok: false, status: 0, message: (err as Error).message }
   }
 }
 
 /** Start a no-account trial: a key with a few requests, claimable later with `darce signup`. */
-async function startTrial(): Promise<{ apiKey: string; limit: number } | { error: string }> {
+async function startTrial(): Promise<{ apiKey: string; limit: number } | { error: string; unreachable?: boolean }> {
   try {
-    const res = await fetch(`${API_BASE}/v1/auth/trial`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-    const data = await res.json().catch(() => ({})) as { api_key?: string; limit?: number; message?: string }
-    if (res.ok && data.api_key) return { apiKey: data.api_key, limit: data.limit ?? 10 }
-    return { error: data.message || `Couldn't start a trial (${res.status}).` }
-  } catch {
-    return { error: "Couldn't reach darce.dev — check your internet connection." }
+    const r = await callApi(`${API_BASE}/v1/auth/trial`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    if (r.ok && typeof r.data.api_key === 'string') return { apiKey: r.data.api_key, limit: typeof r.data.limit === 'number' ? r.data.limit : 10 }
+    return { error: failure(r, "Couldn't start a trial") }
+  } catch (err) {
+    return { error: (err as Error).message, unreachable: true }
   }
 }
 
@@ -98,9 +94,12 @@ export async function signupFlow(currentKey?: string): Promise<string | null> {
   let tier = ''
   if (currentKey) {
     try {
-      const res = await fetch(`${API_BASE}/v1/account`, { headers: { Authorization: `Bearer ${currentKey}` } })
-      tier = ((await res.json().catch(() => ({}))) as { tier?: string }).tier ?? ''
-    } catch {}
+      const r = await callApi(`${API_BASE}/v1/account`, { headers: { Authorization: `Bearer ${currentKey}` } })
+      tier = typeof r.data.tier === 'string' ? r.data.tier : ''
+    } catch (err) {
+      console.log(`\n  ${(err as Error).message}\n`)
+      return null
+    }
   }
   if (tier !== 'trial') {
     if (tier) console.log('\n  You already have an account on this machine. Creating another one:\n')
@@ -118,40 +117,34 @@ export async function signupFlow(currentKey?: string): Promise<string | null> {
     if (password.length < MIN_PASSWORD) { console.log(`  Too short — use at least ${MIN_PASSWORD} characters.\n`); continue }
     const confirm = await p.askSecret('  Confirm password: ')
     if (confirm !== password) { console.log("  Passwords don't match. Try again.\n"); continue }
+    let r
     try {
-      const res = await fetch(`${API_BASE}/v1/auth/claim`, {
+      r = await callApi(`${API_BASE}/v1/auth/claim`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${currentKey}` },
         body: JSON.stringify({ email, password }),
       })
-      const data = await res.json().catch(() => ({})) as { api_key?: string; message?: string }
-      if (res.ok && data.api_key) {
-        saveCredentials(data.api_key, email)
-        console.log(`  Done: ${email} is on the Free plan. Carry on with \`darce --resume\`.\n`)
-        return data.api_key
-      }
-      console.log(`  ${data.message || `Sign-up failed (${res.status}).`}\n`)
-      if (res.status === 409) return null
-    } catch {
-      console.log("  Couldn't reach darce.dev — check your internet connection.\n")
+    } catch (err) {
+      console.log(`  ${(err as Error).message}\n`)
       return null
     }
+    if (r.ok && typeof r.data.api_key === 'string') {
+      saveCredentials(r.data.api_key, email)
+      console.log(`  Done: ${email} is on the Free plan. Carry on with \`darce --resume\`.\n`)
+      return r.data.api_key
+    }
+    console.log(`  ${failure(r, 'Sign-up failed')}\n`)
+    if (r.status === 409) return null
   }
   return null
 }
 
 export function saveCredentials(apiKey: string, email = '') {
   if (email) { addAccount(email, apiKey, API_BASE); return }
-  const rcPath = join(homedir(), '.darcerc')
-  let existing: Record<string, unknown> = {}
-  try {
-    if (existsSync(rcPath)) existing = JSON.parse(readFileSync(rcPath, 'utf-8'))
-  } catch {}
-
-  existing.apiKey = apiKey
-  existing.apiBase = API_BASE
-
-  writePrivate(rcPath, JSON.stringify(existing, null, 2) + '\n')
+  updateGlobalRc(rc => {
+    rc.apiKey = apiKey
+    rc.apiBase = API_BASE
+  })
 }
 
 let lastEmail = ''
@@ -261,6 +254,8 @@ export async function onboard(mode: 'choose' | 'signin' = 'choose'): Promise<str
         console.log(`  You're in. The trial covers a few real tasks. When you want more, run \`darce signup\` for a free daily allowance and keep your history.\n`)
         return t.apiKey
       }
+      // Unreachable means the browser sign-in would only sit waiting too
+      if (t.unreachable) { console.log(`  ${t.error}\n`); return null }
       console.log(`  ${t.error} Let's sign in with your browser instead.\n`)
       choice = '1'
     }

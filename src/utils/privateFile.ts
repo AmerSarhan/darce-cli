@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync, chmodSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdirSync, chmodSync, existsSync, renameSync, unlinkSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -7,11 +7,21 @@ import { homedir } from 'node:os'
  * `mode` on writeFileSync only applies when a file is created, so permissions are set explicitly
  * every time: files made by older versions get fixed on their next write.
  */
-export function writePrivate(path: string, data: string | Buffer): void {
-  const dir = dirname(path)
-  mkdirSync(dir, { recursive: true, mode: 0o700 })
-  writeFileSync(path, data, { mode: 0o600 })
-  try { chmodSync(path, 0o600) } catch {}
+export function writePrivate(target: string, data: string | Buffer): void {
+  mkdirSync(dirname(target), { recursive: true, mode: 0o700 })
+  // Follow a symlinked dotfile so the rename replaces the real file, not the link
+  let path = target
+  try { path = realpathSync(target) } catch {}
+  // Write aside then rename: a crash mid-write leaves the old file whole instead of truncated
+  const tmp = `${path}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, data, { mode: 0o600 })
+    try { chmodSync(tmp, 0o600) } catch {}
+    renameSync(tmp, path)
+  } catch (err) {
+    try { unlinkSync(tmp) } catch {}
+    throw err
+  }
 }
 
 /** Tighten permissions on Darce's own files from earlier versions (key file, history, sessions). */

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readlinkSync, rmSync, statSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -33,52 +34,121 @@ export function findChrome(): string | null {
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
 
+const PROFILE_PREFIX = 'darce-chrome-'
+// Browsers still open when Darce exits (crash, Ctrl+C mid-check) are killed and their profiles removed
+const live = new Set<Browser>()
+let exitHooked = false
+let swept = false
+
+/** Is the Chrome that holds this profile still running? (Its SingletonLock points at "host-pid".) */
+function profileInUse(dir: string): boolean {
+  try {
+    const pid = Number(/-(\d+)$/.exec(readlinkSync(join(dir, 'SingletonLock')))?.[1])
+    if (!pid) return false
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** Profiles left behind by earlier runs that were killed before cleaning up (each is 10-60 MB). */
+function sweepStaleProfiles() {
+  if (swept) return
+  swept = true
+  const dir = tmpdir(), cutoff = Date.now() - 60 * 60_000
+  let names: string[]
+  try { names = readdirSync(dir) } catch { return }
+  for (const n of names) {
+    if (!n.startsWith(PROFILE_PREFIX)) continue
+    const p = join(dir, n)
+    try {
+      if (statSync(p).mtimeMs > cutoff || profileInUse(p)) continue
+      void rm(p, { recursive: true, force: true }).catch(() => {})
+    } catch { /* gone already */ }
+  }
+}
+
 export class Browser {
-  private ws!: WebSocket
-  private proc!: ChildProcess
-  private profile = mkdtempSync(join(tmpdir(), 'darce-chrome-'))
+  private ws?: WebSocket
+  private proc?: ChildProcess
+  private profile = mkdtempSync(join(tmpdir(), PROFILE_PREFIX))
   private seq = 0
+  private closed = false
   private pending = new Map<number, Pending>()
   private listeners = new Set<(method: string, params: any, session?: string) => void>()
 
   static async launch(timeoutMs = 15_000): Promise<Browser> {
     const bin = findChrome()
     if (!bin) throw new Error('No Chrome, Edge or Chromium found. Install Chrome, or set DARCE_CHROME to a Chromium-based browser.')
-    const b = new Browser()
-    b.proc = spawn(bin, [
-      '--headless=new', '--remote-debugging-port=0', `--user-data-dir=${b.profile}`,
-      '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--hide-scrollbars',
-      '--mute-audio', '--disable-background-networking', '--disable-sync', '--force-color-profile=srgb', 'about:blank',
-    ], { stdio: ['ignore', 'ignore', 'pipe'] })
-    const wsUrl = await new Promise<string>((ok, fail) => {
-      let buf = ''
-      const timer = setTimeout(() => fail(new Error('Chrome did not start in time')), timeoutMs)
-      b.proc.stderr!.on('data', (d: Buffer) => {
-        buf += d.toString()
-        const m = buf.match(/DevTools listening on (ws:\/\/\S+)/)
-        if (m) { clearTimeout(timer); ok(m[1]!) }
-      })
-      b.proc.once('exit', code => { clearTimeout(timer); fail(new Error(`Chrome exited (${code})`)) })
-    })
-    b.ws = new WebSocket(wsUrl)
-    await new Promise<void>((ok, fail) => { b.ws.onopen = () => ok(); b.ws.onerror = () => fail(new Error('Could not connect to Chrome')) })
-    b.ws.onmessage = ev => {
-      const msg = JSON.parse(String(ev.data))
-      if (msg.id && b.pending.has(msg.id)) {
-        const p = b.pending.get(msg.id)!
-        b.pending.delete(msg.id); clearTimeout(p.timer)
-        if (msg.error) p.reject(new Error(msg.error.message)); else p.resolve(msg.result)
-      } else if (msg.method) for (const l of b.listeners) l(msg.method, msg.params, msg.sessionId)
+    sweepStaleProfiles()
+    if (!exitHooked) {
+      exitHooked = true
+      process.on('exit', () => { for (const b of live) b.killNow() })
     }
-    return b
+    const b = new Browser()
+    live.add(b)
+    try {
+      const proc = b.proc = spawn(bin, [
+        '--headless=new', '--remote-debugging-port=0', `--user-data-dir=${b.profile}`,
+        '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--hide-scrollbars',
+        '--mute-audio', '--disable-background-networking', '--disable-sync', '--force-color-profile=srgb', 'about:blank',
+      ], { stdio: ['ignore', 'ignore', 'pipe'] })
+      // Without an 'error' listener a failed spawn (EACCES, ENOENT) is an uncaught exception
+      proc.on('error', () => b.ended())
+      proc.once('exit', () => b.ended())
+      const wsUrl = await new Promise<string>((ok, fail) => {
+        let buf = ''
+        const timer = setTimeout(() => fail(new Error('Chrome did not start in time')), timeoutMs)
+        const onData = (d: Buffer) => {
+          buf += d.toString()
+          const m = buf.match(/DevTools listening on (ws:\/\/\S+)/)
+          if (!m) return
+          clearTimeout(timer)
+          // Keep draining stderr (a full pipe would stall Chrome) without keeping what it says
+          proc.stderr!.off('data', onData)
+          proc.stderr!.resume()
+          ok(m[1]!)
+        }
+        proc.stderr!.on('data', onData)
+        proc.once('exit', code => { clearTimeout(timer); fail(new Error(`Chrome exited (${code})`)) })
+        proc.once('error', err => { clearTimeout(timer); fail(new Error(`Couldn't start ${bin}: ${err.message}`)) })
+      })
+      const ws = b.ws = new WebSocket(wsUrl)
+      await new Promise<void>((ok, fail) => {
+        ws.onopen = () => ok()
+        ws.onerror = () => fail(new Error('Could not connect to Chrome'))
+        ws.onclose = () => fail(new Error('Could not connect to Chrome'))
+      })
+      ws.onerror = null
+      ws.onclose = () => b.ended()
+      ws.onmessage = ev => {
+        let msg: any
+        try { msg = JSON.parse(String(ev.data)) } catch { return }
+        if (msg.id && b.pending.has(msg.id)) {
+          const p = b.pending.get(msg.id)!
+          b.pending.delete(msg.id); clearTimeout(p.timer)
+          if (msg.error) p.reject(new Error(msg.error.message)); else p.resolve(msg.result)
+        } else if (msg.method) for (const l of b.listeners) l(msg.method, msg.params, msg.sessionId)
+      }
+      return b
+    } catch (err) {
+      b.close()
+      throw err
+    }
   }
 
   send<T = any>(method: string, params: Record<string, unknown> = {}, sessionId?: string, timeoutMs = 30_000): Promise<T> {
+    if (this.closed || !this.ws) return Promise.reject(new Error('Chrome closed'))
     const id = ++this.seq
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${method} timed out`)) }, timeoutMs)
       this.pending.set(id, { resolve, reject, timer })
-      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
+      try {
+        this.ws!.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
+      } catch (err) {
+        this.pending.delete(id); clearTimeout(timer); reject(err as Error)
+      }
     })
   }
 
@@ -100,12 +170,45 @@ export class Browser {
     return new Page(this, sessionId)
   }
 
-  close() {
-    try { this.ws?.close() } catch { /* already closed */ }
-    try { this.proc?.kill() } catch { /* already gone */ }
-    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Browser closed')) }
+  private failPending(err: Error) {
+    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(err) }
     this.pending.clear()
-    setTimeout(() => { try { rmSync(this.profile, { recursive: true, force: true }) } catch { /* Chrome may still hold files */ } }, 500)
+  }
+
+  private removeProfile() {
+    try { rmSync(this.profile, { recursive: true, force: true, maxRetries: 2 }) } catch { /* Chrome may still hold files */ }
+  }
+
+  /** Chrome went away (exited, crashed, never started, or dropped the connection). */
+  private ended() {
+    this.closed = true
+    this.failPending(new Error('Chrome closed'))
+    try { this.ws?.close() } catch { /* already closed */ }
+    // Once the process is gone nothing writes to the profile any more
+    if (!this.proc || this.proc.exitCode !== null || this.proc.signalCode !== null || this.proc.pid === undefined) {
+      live.delete(this)
+      this.removeProfile()
+    } else {
+      try { this.proc.kill() } catch { /* already gone */ }
+    }
+  }
+
+  close() {
+    this.closed = true
+    this.failPending(new Error('Browser closed'))
+    try { this.ws?.close() } catch { /* already closed */ }
+    if (this.proc?.pid !== undefined && this.proc.exitCode === null && this.proc.signalCode === null) {
+      try { this.proc.kill() } catch { /* already gone */ } // the profile goes on its 'exit'
+    } else {
+      live.delete(this)
+      this.removeProfile()
+    }
+  }
+
+  /** At process exit there's no later tick: kill hard and remove the profile right away. */
+  private killNow() {
+    try { this.proc?.kill('SIGKILL') } catch { /* already gone */ }
+    this.removeProfile()
   }
 }
 

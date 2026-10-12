@@ -30,6 +30,25 @@ export function splitStable(text: string): { stable: string; tail: string } {
   return { stable: text.slice(0, cut), tail: text.slice(cut) }
 }
 
+/**
+ * The last `max` lines of the live tail. Output taller than the terminal makes the terminal redraw the whole
+ * screen every frame (flicker, duplicated scrollback); the full text is printed once it's final.
+ */
+export function liveWindow(text: string, max: number): string {
+  const lines = text.split('\n')
+  if (lines.length <= max) return text
+  const cut = lines.length - max
+  // If the cut lands inside a code block, reopen it so the rest still renders as code
+  let open: string | null = null
+  for (const line of lines.slice(0, cut)) {
+    const m = line.trimStart().match(/^(`{3,}|~{3,})/)
+    if (!m) continue
+    if (!open) open = line.trimStart()
+    else if (m[1]![0] === open[0]) open = null
+  }
+  return [`… ${cut} more line${cut === 1 ? '' : 's'} above`, '', ...(open ? [open] : []), ...lines.slice(cut)].join('\n')
+}
+
 /** Close an unterminated code fence so a half-streamed block renders as code, not stray backticks. */
 export function closeOpenFence(text: string): string {
   // A closing fence that is still arriving ("`" or "``") would show as stray backticks

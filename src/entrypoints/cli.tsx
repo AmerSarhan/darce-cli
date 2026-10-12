@@ -1,9 +1,10 @@
 // Fast paths — no heavy imports
-import { enableCompileCache } from 'node:module'
+// Namespace import: a named import of enableCompileCache fails to link on Node 22.0, which lacks it
+import * as nodeModule from 'node:module'
 import { VERSION } from '../version.js'
 
 // Cache compiled code on disk (Node 22.1+): later launches skip recompiling Ink, React and Darce
-try { enableCompileCache?.() } catch { /* older Node or read-only cache dir: just slower */ }
+try { nodeModule.enableCompileCache?.() } catch { /* older Node or read-only cache dir: just slower */ }
 
 const args = process.argv.slice(2)
 
@@ -56,6 +57,7 @@ if (args[0] === 'login') {
 } else if (args[0] === 'signup') {
   ;(async () => {
     const { loadConfig } = await import('../config/config.js')
+    await exitIfRcBroken()
     const { signupFlow } = await import('../auth/onboarding.js')
     const key = await signupFlow(loadConfig().apiKey || undefined)
     process.exit(key ? 0 : 1)
@@ -106,7 +108,34 @@ if (args[0] === 'login') {
 }
 
 // === Auth Flow ===
+/** Stop with a readable message when ~/.darcerc is unreadable, instead of treating the user as signed out. */
+async function exitIfRcBroken(hasKey = false) {
+  const { globalRcProblem } = await import('../config/config.js')
+  const problem = globalRcProblem()
+  if (!problem) return
+  if (hasKey) { process.stderr.write(`  Warning: ${problem} Your settings in it are ignored for now.\n`); return }
+  console.error(`\n  ${problem}\n`)
+  process.exit(1)
+}
+
+/** Interactive sessions: never die silently with the terminal left in raw mode, and keep going past stray promise rejections. */
+async function installSafetyNet() {
+  const { trace, TRACE_PATH } = await import('../utils/logger.js')
+  const { redactSecrets } = await import('../utils/redact.js')
+  const describe = (e: unknown) => redactSecrets(e instanceof Error ? `${e.stack ?? e.message}` : String(e)).text.slice(0, 2000)
+  process.on('unhandledRejection', reason => trace('unhandled_rejection', { error: describe(reason) }))
+  process.on('uncaughtException', err => {
+    trace('uncaught_exception', { error: describe(err) })
+    try { if (process.stdin.isTTY) process.stdin.setRawMode(false) } catch { /* stdin already gone */ }
+    // Show the cursor, end bracketed paste, pop the kitty keyboard mode Ink pushed
+    try { process.stdout.write('\x1b[?25h\x1b[?2004l\x1b[<u\n') } catch { /* stdout closed */ }
+    process.stderr.write(`\n  Darce stopped on an unexpected error: ${redactSecrets(err?.message ?? String(err)).text}\n  Details are in ${TRACE_PATH}\n\n`)
+    process.exit(1)
+  })
+}
+
 async function authFlow() {
+  await exitIfRcBroken()
   const { onboard } = await import('../auth/onboarding.js')
   const apiKey = await onboard()
   if (!apiKey) process.exit(1)
@@ -123,62 +152,57 @@ async function logoutFlow() {
 }
 
 async function upgradeFlow() {
-  const { readFileSync, existsSync } = await import('node:fs')
-  const { join } = await import('node:path')
-  const { homedir } = await import('node:os')
-
-  const rcPath = join(homedir(), '.darcerc')
-  if (!existsSync(rcPath)) {
+  const { loadConfig } = await import('../config/config.js')
+  const config = loadConfig()
+  await exitIfRcBroken(!!config.apiKey)
+  if (!config.apiKey) {
     console.log('\n  Not logged in. Run `darce login` first.\n')
     return
   }
 
-  let config: Record<string, unknown>
-  try {
-    config = JSON.parse(readFileSync(rcPath, 'utf-8'))
-  } catch {
-    console.log('\n  Invalid config. Run `darce login` again.\n')
-    return
-  }
-
-  const apiKey = config.apiKey as string
-  const apiBase = (config.apiBase as string) || 'https://api.darce.dev'
-
   console.log('\n  Creating checkout session...')
 
-  const res = await fetch(`${apiBase}/v1/checkout`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-  })
+  const { callApi, failure } = await import('../auth/http.js')
+  let r
+  try {
+    r = await callApi(`${config.apiBase || 'https://api.darce.dev'}/v1/checkout`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    })
+  } catch (err) {
+    console.log(`  ${(err as Error).message}\n`)
+    process.exit(1)
+  }
 
-  const data = await res.json() as { url?: string; error?: string }
-
-  if (!res.ok) {
-    if (data.error === 'Already on Pro') {
+  if (!r.ok) {
+    if (r.data.error === 'Already on Pro') {
       console.log('  You\'re already on Pro!\n')
     } else {
-      console.log(`  Error: ${data.error || 'Failed to create checkout'}\n`)
+      console.log(`  Error: ${failure(r, 'Failed to create checkout')}\n`)
     }
     return
   }
 
+  const url = typeof r.data.url === 'string' ? r.data.url : ''
   console.log(`\n  Open this link to upgrade:\n`)
-  console.log(`  ${data.url}\n`)
+  console.log(`  ${url}\n`)
 
   // Try to open browser automatically (no shell, https only)
   const { openInBrowser } = await import('../core/billing.js')
-  if (data.url) openInBrowser(data.url)
+  if (url) openInBrowser(url)
 }
 
 // === Main REPL ===
 async function main(modelOverride?: string, initialPrompt?: string, resumeSession?: boolean) {
+  await installSafetyNet()
   const { lockDownDarceFiles } = await import('../utils/privateFile.js')
   lockDownDarceFiles()
   const { loadConfig } = await import('../config/config.js')
   const config = loadConfig()
+  await exitIfRcBroken(!!config.apiKey)
 
   // First run — set up an account right here, then drop straight into the REPL
   if (!config.apiKey) {
@@ -281,6 +305,7 @@ async function printMain(modelOverride?: string, prompt?: string) {
   }
   const { loadConfig } = await import('../config/config.js')
   const config = loadConfig()
+  await exitIfRcBroken(!!config.apiKey)
   if (!config.apiKey) {
     console.error('No Darce account on this machine. Run `darce login` in a terminal, or set DARCE_API_KEY.')
     process.exit(1)

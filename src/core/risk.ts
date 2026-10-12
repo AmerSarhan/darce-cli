@@ -207,14 +207,41 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
     const out = args.find(a => a.startsWith('--output='))
     if (out) risk = max(risk, outside(out.slice(9), cwd) ? { level: 2, reason: 'writes outside the project' } : { level: 1, reason: 'writes a file' })
     if (gsub === 'stash' && (args.includes('list') || args.includes('show'))) return risk
+    const gargs = args.slice(k + 1)
+    const has = (short: string, ...long: string[]) => gargs.some(a => long.some(l => a === l || a.startsWith(l + '=')) || (/^-[a-zA-Z]+$/.test(a) && [...short].some(c => a.includes(c))))
+    const positional = gargs.filter(a => !a.startsWith('-'))
     if (GIT_NETWORK.has(gsub)) {
-      if (gsub === 'push' && args.some(a => a === '--force' || a === '-f' || a.startsWith('--force-with-lease') || a.startsWith('+'))) return { level: 3, reason: 'force-pushes and can overwrite remote history' }
+      // Level 3 so an "always allow git push" rule never covers these
+      if (gsub === 'push' && (has('f', '--force', '--force-with-lease') || gargs.some(a => a.startsWith('+')))) return { level: 3, reason: 'force-pushes and can overwrite remote history' }
+      if (gsub === 'push' && (has('d', '--delete', '--mirror', '--prune') || positional.some(a => a.startsWith(':')))) return { level: 3, reason: 'deletes or overwrites branches on the remote' }
       return max(risk, { level: 2, reason: `git ${gsub} talks to a remote` })
     }
     if (gsub === 'reset' && args.includes('--hard')) return { level: 3, reason: 'discards uncommitted work (git reset --hard)' }
     if (gsub === 'clean' && args.some(a => /^-[a-zA-Z]*f/.test(a))) return { level: 3, reason: 'deletes untracked files (git clean -f)' }
-    if (gsub === 'branch' && args.some(a => a === '-D')) return max(risk, { level: 2, reason: 'force-deletes a branch' })
     if (gsub === 'stash' && (args.includes('drop') || args.includes('clear'))) return max(risk, { level: 2, reason: 'drops stashed work' })
+    // Snapshots restore files, not refs: anything that deletes, moves or rewrites them asks
+    if (gsub === 'branch') {
+      if (has('dDfMC', '--delete', '--force')) return max(risk, { level: 2, reason: `deletes or force-moves a branch${NO_UNDO}` })
+      const listing = has('lar', '--list', '--all', '--remotes', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at', '--show-current')
+      if (has('mcu', '--move', '--copy', '--set-upstream-to', '--unset-upstream', '--edit-description') || (positional.length && !listing)) return max(risk, { level: 1, reason: 'git branch changes the repository' })
+      return risk
+    }
+    if (gsub === 'tag') {
+      if (has('df', '--delete', '--force')) return max(risk, { level: 2, reason: `deletes or moves a tag${NO_UNDO}` })
+      if (positional.length && !has('ln', '--list', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at')) return max(risk, { level: 1, reason: 'git tag creates a tag' })
+      return risk
+    }
+    if (gsub === 'remote') {
+      const op = positional[0] ?? ''
+      if (['remove', 'rm', 'set-url', 'prune', 'update'].includes(op)) return max(risk, { level: 2, reason: `git remote ${op} changes where git pushes or deletes remote refs${NO_UNDO}` })
+      if (op && !['show', 'get-url'].includes(op)) return max(risk, { level: 1, reason: `git remote ${op} changes the repository` })
+      return risk
+    }
+    if (gsub === 'reflog' && ['expire', 'delete'].includes(positional[0] ?? '')) return max(risk, { level: 2, reason: `deletes reflog entries used to recover lost commits${NO_UNDO}` })
+    if (gsub === 'commit' && has('', '--amend')) return max(risk, { level: 2, reason: `rewrites the last commit${NO_UNDO}` })
+    if (gsub === 'rebase' && !has('', '--abort', '--quit')) return max(risk, { level: 2, reason: `rewrites commit history${NO_UNDO}` })
+    if (gsub === 'checkout' && (gargs.includes('--') || gargs.includes('.') || has('f', '--force'))) return max(risk, { level: 2, reason: 'discards uncommitted changes to files' })
+    if (gsub === 'reset') return max(risk, { level: 2, reason: `git reset moves the branch or unstages changes${NO_UNDO}` })
     if (GIT_READ.has(gsub)) return risk
     if (GIT_WRITE_LOCAL.has(gsub)) return max(risk, { level: 1, reason: `git ${gsub} changes the repository` })
     return max(risk, { level: 2, reason: `git ${gsub}` })
@@ -252,11 +279,25 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
     if (args.includes('-f') || /system\s*\(|\|\s*getline|getline|>|\|/.test(prog)) return max(risk, { level: 2, reason: 'awk program runs commands or writes files' })
     return risk
   }
-  if (cmd === 'sort') {
+  const writes = (target: string): Risk => outside(target, cwd) ? { level: 2, reason: `writes outside the project (${target})` } : { level: 1, reason: `writes ${target}` }
+  if (cmd === 'sort' || cmd === 'tree') {
     const o = args.findIndex(a => a === '-o' || a.startsWith('--output'))
     if (o === -1) return risk
-    const target = args[o]!.startsWith('--output=') ? args[o]!.slice(9) : args[o + 1] ?? ''
-    return max(risk, outside(target, cwd) ? { level: 2, reason: 'writes outside the project' } : { level: 1, reason: 'writes a file' })
+    return max(risk, writes(args[o]!.startsWith('--output=') ? args[o]!.slice(9) : args[o + 1] ?? ''))
+  }
+  if (cmd === 'yq' && args.some(a => a === '--inplace' || /^-[a-zA-Z]+$/.test(a) && a.includes('i'))) {
+    const files = args.filter(a => !a.startsWith('-')).slice(1)
+    return files.reduce<Risk>((r, f) => max(r, writes(f)), max(risk, { level: 1, reason: 'edits files in place' }))
+  }
+  if (cmd === 'uniq') {
+    // uniq [input [output]]: the second operand is overwritten
+    const operands: string[] = []
+    for (let j = 0; j < args.length; j++) {
+      const a = args[j]!
+      if (a === '-f' || a === '-s' || a === '-w') j++
+      else if (a === '-' || !a.startsWith('-')) operands.push(a)
+    }
+    return operands[1] && operands[1] !== '-' ? max(risk, writes(operands[1])) : risk
   }
   if ((cmd === 'rg' || cmd === 'ag') && args.some(a => a.startsWith('--pre'))) return max(risk, { level: 2, reason: 'rg --pre runs a program on every file' })
   if (cmd === 'fd' || cmd === 'fdfind') {

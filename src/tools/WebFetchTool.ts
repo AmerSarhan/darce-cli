@@ -14,6 +14,26 @@ const inputSchema = z.object({
 type Input = z.infer<typeof inputSchema>
 type Output = { status: number; url: string; title?: string; body: string; via: 'direct' | 'stealth' }
 
+/** The body as text, reading at most `max` bytes so a huge or endless response can't exhaust memory. */
+export async function readCapped(res: Response, max = 2_000_000): Promise<{ text: string; truncated: boolean }> {
+  if (!res.body) return { text: '', truncated: false }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  let bytes = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) return { text: text + decoder.decode(), truncated: false }
+    const room = max - bytes
+    bytes += value.byteLength
+    if (bytes > max) {
+      await reader.cancel().catch(() => {})
+      return { text: text + decoder.decode(value.subarray(0, room)), truncated: true }
+    }
+    text += decoder.decode(value, { stream: true })
+  }
+}
+
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
 
 export const WebFetchTool: ToolDef<typeof inputSchema, Output> = {
@@ -35,7 +55,8 @@ export const WebFetchTool: ToolDef<typeof inputSchema, Output> = {
       })
       status = res.status
       contentType = res.headers.get('content-type') ?? ''
-      body = await res.text()
+      const read = await readCapped(res)
+      body = read.text + (read.truncated ? '\n\n…(response cut off after 2MB)' : '')
     } catch (err) {
       body = `Fetch error: ${(err as Error).message}`
     }

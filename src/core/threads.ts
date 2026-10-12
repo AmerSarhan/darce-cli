@@ -55,6 +55,7 @@ export type RunThreadOptions = {
   signal: AbortSignal
   authorize: NonNullable<QueryParams['authorize']>
   beforeChange?: QueryParams['beforeChange']
+  afterChange?: QueryParams['afterChange']
   onUpdate: () => void
   maxTurns?: number
 }
@@ -89,6 +90,7 @@ export async function runThread(o: RunThreadOptions): Promise<void> {
       toolFilter: allowed,
       authorize: async call => (allowed(call.name) ? o.authorize(call) : { allow: false as const, reason: `${call.name} isn't available in this thread.` }),
       beforeChange: o.beforeChange,
+      afterChange: o.afterChange,
     })
     let text = ''
     let result = await gen.next()

@@ -17,8 +17,8 @@ export type BrainSource = {
   model: () => string
   gitRoot: () => string | null
   timeline: () => { n: number; label: string; at: number }[]
-  stepDiff: (i: number) => FileDiff[] | null
-  sessionDiff: () => FileDiff[] | null
+  stepDiff: (i: number) => FileDiff[] | null | Promise<FileDiff[] | null>
+  sessionDiff: () => FileDiff[] | null | Promise<FileDiff[] | null>
 }
 
 const SECRET_NAME = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_(rsa|ed25519|ecdsa)(\.pub)?|\.npmrc|\.netrc|\.darcerc)$/i
@@ -67,18 +67,18 @@ export async function startBrain(src: BrainSource): Promise<string> {
             model: src.model(),
             cwd: src.cwd,
             timeline: src.timeline(),
-            changed: (src.sessionDiff() ?? []).map(rel).map(d => ({ path: d.path, added: d.added, removed: d.removed, created: d.created })),
+            changed: ((await src.sessionDiff()) ?? []).map(rel).map(d => ({ path: d.path, added: d.added, removed: d.removed, created: d.created })),
           })
         case '/api/step': {
           const i = Number(url.searchParams.get('i'))
-          return json(res, (src.stepDiff(i) ?? []).map(rel))
+          return json(res, ((await src.stepDiff(i)) ?? []).map(rel))
         }
         case '/api/file': {
           const p = url.searchParams.get('path') ?? ''
           const abs = resolve(src.cwd, p)
           if (!abs.startsWith(resolve(src.cwd) + sep)) return send(res, 400, 'text/plain', 'Outside the project')
           if (isSecretFile(p)) return json(res, { path: p, hidden: true })
-          const diff = (src.sessionDiff() ?? []).map(rel).find(d => d.path === p) ?? null
+          const diff = ((await src.sessionDiff()) ?? []).map(rel).find(d => d.path === p) ?? null
           let content: string | null = null
           try { if (statSync(abs).size <= 400 * 1024) content = readFileSync(abs, 'utf8') } catch { /* deleted or unreadable */ }
           return json(res, { path: p, content, diff })
@@ -96,7 +96,8 @@ export async function startBrain(src: BrainSource): Promise<string> {
           return send(res, 404, 'text/plain', 'Not found')
       }
     } catch (err) {
-      return send(res, 500, 'text/plain', (err as Error).message)
+      if (res.headersSent) return void res.end()
+      return send(res, 500, 'application/json', JSON.stringify({ error: (err as Error).message }))
     }
   })
 
@@ -116,7 +117,9 @@ export async function startBrain(src: BrainSource): Promise<string> {
 }
 
 export function stopBrain(): void {
+  // close() alone waits for open tabs' event streams to end, keeping the port bound
   running?.server.close()
+  running?.server.closeAllConnections()
   running = null
   brain.active = false
 }

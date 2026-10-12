@@ -45,6 +45,19 @@ export function findPlayer(): Player | null {
   return player
 }
 
+// Clips and players still around when Darce exits: the player's own 'exit' never comes after ours
+const clips = new Set<string>()
+const players = new Set<ChildProcess>()
+let exitHooked = false
+function hookExit() {
+  if (exitHooked) return
+  exitHooked = true
+  process.on('exit', () => {
+    for (const c of players) { try { c.kill() } catch { /* already gone */ } }
+    for (const f of clips) { try { unlinkSync(f) } catch { /* already gone */ } }
+  })
+}
+
 export class Narrator {
   private playing: ChildProcess | null = null
   private next: { event: VoiceEvent; context: string } | null = null
@@ -97,6 +110,8 @@ export class Narrator {
       const audio = Buffer.from(await res.arrayBuffer())
       if (gen !== this.generation) return // stopped while we were fetching
       const file = join(tmpdir(), `darce-voice-${process.pid}-${Date.now()}.mp3`)
+      hookExit()
+      clips.add(file)
       writeFileSync(file, audio)
       trace('voice', { event, ms: Date.now() - t0, line: decodeURIComponent(res.headers.get('x-darce-line') ?? '') })
       this.fetching = false
@@ -112,10 +127,13 @@ export class Narrator {
 
   private play(p: Player, file: string): void {
     const child = spawn(p.cmd, p.args(file), { stdio: 'ignore', windowsHide: true })
+    players.add(child)
     this.playing = child
     this.lastSpokeAt = Date.now()
     const done = () => {
+      players.delete(child)
       if (this.playing === child) this.playing = null
+      clips.delete(file)
       try { unlinkSync(file) } catch { /* already gone */ }
       this.lastSpokeAt = Date.now()
       this.drain()

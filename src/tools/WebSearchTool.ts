@@ -3,6 +3,7 @@ import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
 import { looksBlocked } from '../web/html.js'
 import { scrapifyConfig, scrapifyFetch } from '../web/scrapify.js'
+import { readCapped } from './WebFetchTool.js'
 
 const inputSchema = z.object({
   query: z.string().describe('What to search for'),
@@ -63,7 +64,7 @@ export const WebSearchTool: ToolDef<typeof inputSchema, Output> = {
         signal: context.abortSignal ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
       })
       status = res.status
-      html = await res.text()
+      html = (await readCapped(res)).text
     } catch {}
 
     let results = parseDuckDuckGo(html)

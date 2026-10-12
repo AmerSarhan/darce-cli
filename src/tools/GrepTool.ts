@@ -11,7 +11,7 @@ function hasRipgrep(): boolean {
   }
   return rgAvailable
 }
-import { resolve } from 'node:path'
+import { resolve, relative, isAbsolute } from 'node:path'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
 
@@ -32,6 +32,11 @@ export const GrepTool: ToolDef<typeof inputSchema, string> = {
 
   async call(input: Input, context: ToolContext): Promise<ToolResult<string>> {
     const searchPath = input.path ? resolve(context.cwd, input.path) : context.cwd
+    // rg matches globs against the path relative to its cwd (absolute outside it), so asking
+    // for a path inside node_modules would exclude everything: keep only skips below the path
+    const rel = relative(context.cwd, searchPath)
+    const within = (rel.startsWith('..') || isAbsolute(rel) ? searchPath : rel).split(/[\\/]/)
+    const skip = SKIP_DIRS.filter(d => !within.includes(d))
 
     const args = [
       '--line-number',
@@ -41,16 +46,17 @@ export const GrepTool: ToolDef<typeof inputSchema, string> = {
       // Minified bundles produce enormous single-line matches
       '--max-columns', '400', '--max-columns-preview',
       // Dependency and build folders at any depth, even outside a git repository
-      ...SKIP_DIRS.flatMap(d => ['--glob', `!**/${d}/**`]),
+      ...skip.flatMap(d => ['--glob', `!**/${d}/**`]),
     ]
     if (input.glob) {
       args.push('--glob', input.glob)
     }
-    args.push(input.pattern, searchPath)
+    // -e and --: a pattern or path starting with '-' is not an option
+    args.push('-e', input.pattern, '--', searchPath)
 
     const rg = hasRipgrep()
     const bin = rg ? 'rg' : 'grep'
-    const grepArgs = ['-rnIE', '-m', '100', ...SKIP_DIRS.map(d => `--exclude-dir=${d}`), ...(input.glob ? [`--include=${input.glob.replace(/^\*\*\//, '')}`] : []), '-e', input.pattern, searchPath]
+    const grepArgs = ['-rnIE', '-m', '100', ...skip.map(d => `--exclude-dir=${d}`), ...(input.glob ? [`--include=${input.glob.replace(/^\*\*\//, '')}`] : []), '-e', input.pattern, '--', searchPath]
 
     return new Promise((resolvePromise) => {
       const proc = spawn(bin, rg ? args : grepArgs, {

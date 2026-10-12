@@ -202,12 +202,19 @@ export async function loadModels(opts: { force?: boolean } = {}): Promise<ModelP
     catalog = cached.models.filter(isCodingModel)
     const usable = new Set(catalog.map(m => m.id))
     popularity = (cached.popular ?? []).filter(id => usable.has(id))
-    popularity = cached.popular ?? []
     return catalog
   }
 
+  // The ranking is a ~6 MB download, so the catalog doesn't wait for it; it lands in the picker when it arrives
+  const popular = fetchPopularity()
+  const writeCache = (models: ModelProfile[], ranking: string[]) => {
+    try {
+      mkdirSync(join(homedir(), '.darce'), { recursive: true })
+      writeFileSync(CACHE_PATH, JSON.stringify({ fetchedAt: Date.now(), models, popular: ranking }))
+    } catch {}
+  }
   try {
-    const [res, popular] = await Promise.all([fetch(MODELS_URL, { signal: AbortSignal.timeout(8000) }), fetchPopularity()])
+    const res = await fetch(MODELS_URL, { signal: AbortSignal.timeout(15_000) })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json() as { data: OpenRouterModel[] }
     const models = toModelProfiles(data.data)
@@ -215,18 +222,20 @@ export async function loadModels(opts: { force?: boolean } = {}): Promise<ModelP
       catalog = models
       // Keep only popular models Darce can actually use (tool calling)
       const usable = new Set(models.map(m => m.id))
-      popularity = popular.filter(id => usable.has(id))
-      try {
-        mkdirSync(join(homedir(), '.darce'), { recursive: true })
-        writeFileSync(CACHE_PATH, JSON.stringify({ fetchedAt: Date.now(), models, popular: popularity }))
-      } catch {}
+      writeCache(models, (cached?.popular ?? []).filter(id => usable.has(id)))
+      void popular.then(list => {
+        if (catalog !== models) return // a newer refresh took over
+        popularity = list.filter(id => usable.has(id))
+        writeCache(models, popularity)
+      })
       return catalog
     }
   } catch {}
 
   if (cached?.models.length) {
     catalog = cached.models.filter(isCodingModel)
-    popularity = cached.popular ?? []
+    const usable = new Set(catalog.map(m => m.id))
+    popularity = (cached.popular ?? []).filter(id => usable.has(id))
   }
   return catalog
 }

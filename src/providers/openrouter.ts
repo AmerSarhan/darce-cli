@@ -1,7 +1,7 @@
 import { parseSSEFrames } from '../core/streaming.js'
 import { debug, trace } from '../utils/logger.js'
 import type { Message, StreamEvent, TokenUsage, ContentBlock } from '../types.js'
-import type { Provider, OpenRouterTool } from './provider.js'
+import { markCutOff, type Provider, type OpenRouterTool } from './provider.js'
 import { getModelProfile } from '../config/models.js'
 
 /** Unknown models are assumed to accept images (the request fails loudly if not). */
@@ -81,6 +81,18 @@ function toOpenRouterMessages(messages: Message[], vision = true): Array<Record<
   }
 
   return result
+}
+
+const RETRY_STATUS = new Set([429, 500, 502, 503, 504])
+
+/** Resolves false as soon as `signal` aborts, so a backoff never delays a cancel. */
+function sleep(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise(resolve => {
+    if (signal?.aborted) return resolve(false)
+    const onAbort = () => { clearTimeout(timer); resolve(false) }
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(true) }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 export class OpenRouterProvider implements Provider {
@@ -181,12 +193,12 @@ export class OpenRouterProvider implements Provider {
         trace('headers', { model, status: response.status, ms: since() })
         // A used-up Darce allowance won't clear in seconds: say so instead of retrying
         const outOfAllowance = response.status === 429 && (await response.clone().json().catch(() => null) as { remaining?: number } | null)?.remaining === 0
-        if (response.status === 429 && !outOfAllowance && retries < maxRetries) {
+        if (RETRY_STATUS.has(response.status) && !outOfAllowance && retries < maxRetries) {
           retries++
           const delay = Math.min(1000 * Math.pow(2, retries), 8000)
-          debug(`Rate limited, retrying in ${delay}ms (attempt ${retries})`)
-          await new Promise(r => setTimeout(r, delay))
-          if (signal?.aborted) return
+          debug(`HTTP ${response.status}, retrying in ${delay}ms (attempt ${retries})`)
+          await response.body?.cancel().catch(() => {})
+          if (!await sleep(delay, signal)) return
           continue
         }
 
@@ -205,7 +217,7 @@ export class OpenRouterProvider implements Provider {
           retries++
           const delay = Math.min(1000 * Math.pow(2, retries), 8000)
           debug(`Network error, retrying in ${delay}ms`, err)
-          await new Promise(r => setTimeout(r, delay))
+          if (!await sleep(delay, signal)) return
           continue
         }
         yield { type: 'error', error: `Network error: ${err}` }
@@ -219,9 +231,21 @@ export class OpenRouterProvider implements Provider {
     let fullContent = ''
     let usage: TokenUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
-    // Track active tool calls
-    const activeToolCalls = new Map<number, { id: string; name: string; arguments: string }>()
+    // Tool calls in arrival order; a delta's index points at the call it continues
+    type ToolCall = { id: string; idless: boolean; name: string; arguments: string }
+    const toolCalls: ToolCall[] = []
+    const atIndex = new Map<number, ToolCall>()
+    let finishReason: string | undefined
     let toolEndsEmitted = false
+
+    const parseArgs = (raw: string): Record<string, unknown> | null => {
+      try { const v = JSON.parse(raw || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : null } catch { return null }
+    }
+    const finalMessage = (): Message => {
+      const blocks: ContentBlock[] = fullContent ? [{ type: 'text', text: fullContent }] : []
+      for (const tc of toolCalls) blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: parseArgs(tc.arguments) ?? markCutOff({}) })
+      return { role: 'assistant', content: blocks.length > 0 ? blocks : fullContent }
+    }
 
     try {
       while (true) {
@@ -234,7 +258,14 @@ export class OpenRouterProvider implements Provider {
           return
         }
         const { done, value } = readResult
-        if (done) { trace('stream_end', { model, ms: since(), keepalives, sawDone: false }); break }
+        if (done) {
+          trace('stream_end', { model, ms: since(), keepalives, sawDone: false, finishReason })
+          if (signal.aborted) return
+          // Some upstreams close right after the last chunk (or send [DONE] without its blank line): an answer that finished is still whole
+          if ((finishReason && finishReason !== 'error') || /^data:\s*\[DONE\]/m.test(buffer)) { yield { type: 'message_complete', message: finalMessage(), usage }; return }
+          yield { type: 'error', error: 'The connection closed mid-answer' }
+          return
+        }
         onActivity()
         if (!firstByte) { firstByte = true; trace('first_byte', { model, ms: since() }) }
 
@@ -251,38 +282,8 @@ export class OpenRouterProvider implements Provider {
 
         for (const frame of frames) {
           if (frame.data === '[DONE]') {
-            trace('done', { model, ms: since(), tokens: usage.total_tokens, cached: cachedTokens, keepalives, chars: fullContent.length, toolCalls: activeToolCalls.size })
-            // Build final message
-            const contentBlocks: ContentBlock[] = []
-            if (fullContent) {
-              contentBlocks.push({ type: 'text', text: fullContent })
-            }
-            for (const tc of activeToolCalls.values()) {
-              try {
-                contentBlocks.push({
-                  type: 'tool_use',
-                  id: tc.id,
-                  name: tc.name,
-                  input: JSON.parse(tc.arguments || '{}'),
-                })
-              } catch {
-                contentBlocks.push({
-                  type: 'tool_use',
-                  id: tc.id,
-                  name: tc.name,
-                  input: {},
-                })
-              }
-            }
-
-            yield {
-              type: 'message_complete',
-              message: {
-                role: 'assistant',
-                content: contentBlocks.length > 0 ? contentBlocks : fullContent,
-              },
-              usage,
-            }
+            trace('done', { model, ms: since(), tokens: usage.total_tokens, cached: cachedTokens, keepalives, chars: fullContent.length, toolCalls: toolCalls.length, finishReason })
+            yield { type: 'message_complete', message: finalMessage(), usage }
             return
           }
 
@@ -298,8 +299,9 @@ export class OpenRouterProvider implements Provider {
           }
           if (chunk.error) {
             const message = String(chunk.error?.message ?? chunk.error)
-            trace('upstream_error', { model, ms: since(), error: message.slice(0, 200) })
-            if (!fullContent && activeToolCalls.size === 0) { yield { type: 'error', error: `${model.split('/').pop()}: ${message}` }; return }
+            trace('upstream_error', { model, ms: since(), error: message.slice(0, 200), partial: !!fullContent || toolCalls.length > 0 })
+            yield { type: 'error', error: `${model.split('/').pop()}: ${message}` }
+            return
           }
 
           // Extract usage if present
@@ -315,59 +317,41 @@ export class OpenRouterProvider implements Provider {
           const choice = chunk.choices?.[0]
           if (!choice) continue
 
+          // The finishing chunk may carry no delta at all
           const delta = choice.delta
-          if (!delta) continue
 
-          // Text content
-          if (delta.content) {
+          if (delta?.content) {
             fullContent += delta.content
             yield { type: 'text_delta', text: delta.content }
           }
 
-          // Tool calls
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const index = tc.index ?? 0
-
-              if (tc.id) {
-                // New tool call starting
-                activeToolCalls.set(index, {
-                  id: tc.id,
-                  name: tc.function?.name ?? '',
-                  arguments: tc.function?.arguments ?? '',
-                })
-                yield {
-                  type: 'tool_use_start',
-                  id: tc.id,
-                  name: tc.function?.name ?? '',
-                }
-              } else if (activeToolCalls.has(index)) {
-                // Continuation of existing tool call
-                const active = activeToolCalls.get(index)!
-                if (tc.function?.name) active.name = tc.function.name
-                if (tc.function?.arguments) {
-                  active.arguments += tc.function.arguments
-                  yield {
-                    type: 'tool_use_delta',
-                    id: active.id,
-                    json: tc.function.arguments,
-                  }
-                }
-              }
+          for (const tc of delta?.tool_calls ?? []) {
+            const index = tc.index ?? 0
+            let active = atIndex.get(index)
+            // Some providers repeat the id on every chunk of a call: only a different id starts a new one
+            if (!active || (tc.id && !active.idless && tc.id !== active.id)) {
+              if (!tc.id && !tc.function?.name) continue
+              active = { id: tc.id || `call_${Date.now()}_${toolCalls.length}`, idless: !tc.id, name: tc.function?.name ?? '', arguments: tc.function?.arguments ?? '' }
+              toolCalls.push(active)
+              atIndex.set(index, active)
+              yield { type: 'tool_use_start', id: active.id, name: active.name }
+              continue
+            }
+            if (tc.id && active.idless) { active.id = tc.id; active.idless = false }
+            if (tc.function?.name) active.name = tc.function.name
+            if (tc.function?.arguments) {
+              active.arguments += tc.function.arguments
+              yield { type: 'tool_use_delta', id: active.id, json: tc.function.arguments }
             }
           }
 
-          // Check for finish_reason to emit tool_use_end (once only)
-          if (!toolEndsEmitted && (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'stop')) {
-            toolEndsEmitted = true
-            for (const tc of activeToolCalls.values()) {
-              let parsedInput: Record<string, unknown> = {}
-              try { parsedInput = JSON.parse(tc.arguments || '{}') } catch {}
-              yield {
-                type: 'tool_use_end',
-                id: tc.id,
-                name: tc.name,
-                input: parsedInput,
+          if (choice.finish_reason) {
+            finishReason = choice.finish_reason
+            if (!toolEndsEmitted) {
+              toolEndsEmitted = true
+              for (const tc of toolCalls) {
+                const input = parseArgs(tc.arguments)
+                if (input) yield { type: 'tool_use_end', id: tc.id, name: tc.name, input }
               }
             }
           }

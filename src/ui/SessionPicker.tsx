@@ -45,7 +45,7 @@ export function SessionPicker({ cwd, currentSessionId, onSelect, onClose }: Prop
   const pick = rows[pos]
 
   useInput((ch, key) => {
-    if (key.escape) { onClose(); return }
+    if (key.escape || (key.ctrl && ch === 'c')) { onClose(); return }
     if (key.return) { if (pick) onSelect(pick); return }
     if (key.tab) { setEverywhere(e => !e); setCursor(0); return }
     if (key.upArrow) { setCursor(Math.max(0, pos - 1)); return }

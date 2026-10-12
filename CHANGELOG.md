@@ -2,6 +2,42 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.16.0
+
+Stability and speed. Every part of a session was audited and tested in a real terminal; this release fixes what turned up.
+
+- **Undo is safer.**
+  - `/undo` reverts only what Darce's step changed. Edits you made since, and files you created, are left alone, and the undo message lists what was kept.
+  - A `git commit` or `git add` Darce ran is undone too: the branch moves back, and the staging area is restored.
+  - Undo restores ignored files like `.env` that a shell command moved or changed.
+  - Files undo removes go to `.git/darce-trash` for 7 days instead of being deleted.
+  - Outside a git repository, undo says why it can't reverse a shell command, instead of skipping past it.
+  - Binary files are restored byte for byte.
+- **No more freezes in big repos.**
+  - Snapshots run in the background and reuse git's cache: about 0.2s a step where they used to freeze the screen for 1.5s.
+  - Launch shows the prompt right away.
+  - Untracked files over 25 MB are no longer copied into `.git` on every step.
+- **Lighter streaming.** Long code blocks no longer re-highlight on every frame, and the live answer stays within the screen height. In a measured run, that meant 3× less CPU and 5× less terminal output.
+- **Shell commands behave.**
+  - A timeout or Esc stops the whole command, including anything it started.
+  - `cmd &` no longer hangs the turn, and the background job keeps running.
+  - Output is capped, so a runaway command can't crash Darce.
+- **Sessions recover.**
+  - A tool call cut off mid-stream, a dropped connection, or a server error mid-answer used to leave a session that failed every request. These are now repaired, and resumed sessions are repaired too.
+  - Server errors (5xx) are retried.
+  - Session files are written atomically, and the session list no longer re-reads every past session.
+- **Input.**
+  - Enter is no longer lost when it arrives in the same keystroke batch as your text (slow frames, SSH, dictation).
+  - Two approval prompts at once no longer hang the turn.
+  - Ctrl+C twice always exits, even mid-step.
+- **Safer defaults.**
+  - Deleting branches or tags, rewriting remotes, `git reset`, `commit --amend` and `rebase` now ask first.
+  - `git push --delete`, `--mirror` and `:branch` are never covered by "always allow".
+- **Edits and reads.** Edit refuses files that aren't UTF-8 instead of corrupting them, and handles CRLF files. Read caps huge lines, and says so for binary files and directories.
+- **Config is protected.** A broken `~/.darcerc` is never overwritten (which used to wipe your key). Darce says what's wrong and keeps a copy.
+- **Clean exits.** Headless Chrome from `/taste`, voice clips, and ports from `/brain` and `/taste` are cleaned up. Sign-in and sign-up calls time out with a readable error instead of hanging.
+- Runs on Node 22.0 again; every command failed there before.
+
 ## 0.15.1
 
 - **The taste studio stays on the page after a fix**, so the before/after is the first thing you see, and the empty status line no longer shows before Darce has said anything.
