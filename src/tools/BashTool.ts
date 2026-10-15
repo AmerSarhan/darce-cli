@@ -1,8 +1,9 @@
 import { z } from 'zod'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
 import { safeEnv } from '../utils/env.js'
+import { shellInvocation } from './shell.js'
 
 const inputSchema = z.object({
   command: z.string().describe('Shell command to execute'),
@@ -49,9 +50,19 @@ class Capture {
   }
 }
 
+// Windows has no process groups; taskkill /T ends the command and everything it started
+const taskkill = (pid: number) => ['/pid', String(pid), '/T', '/F']
+
 // Commands run in their own process group; make sure none outlive Darce
 const running = new Set<number>()
-process.once('exit', () => { for (const pid of running) try { process.kill(-pid, 'SIGKILL') } catch {} })
+process.once('exit', () => {
+  for (const pid of running) {
+    try {
+      if (isWindows) spawnSync('taskkill', taskkill(pid), { stdio: 'ignore', windowsHide: true, timeout: 2000 })
+      else process.kill(-pid, 'SIGKILL')
+    } catch {}
+  }
+})
 
 export const BashTool: ToolDef<typeof inputSchema, Output> = {
   name: 'Bash',
@@ -62,20 +73,22 @@ export const BashTool: ToolDef<typeof inputSchema, Output> = {
 
   async call(input: Input, context: ToolContext): Promise<ToolResult<Output>> {
     const timeout = input.timeout ?? 120000
-    const shell = process.env.SHELL || process.env.COMSPEC || 'bash'
+    const shell = shellInvocation(input.command)
 
     return new Promise((resolve) => {
       // Credentials in the user's environment are withheld unless allowed via passEnv
       const { env } = safeEnv(process.env, context.passEnv)
       // Own process group, so a timeout or abort reaches everything the command started
-      const proc = spawn(shell, ['-c', input.command], {
+      const proc = spawn(shell.file, shell.args, {
         cwd: context.cwd,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: !isWindows,
+        windowsHide: true,
+        windowsVerbatimArguments: shell.windowsVerbatimArguments,
       })
       const pid = proc.pid
-      if (pid && !isWindows) running.add(pid)
+      if (pid) running.add(pid)
 
       const stdout = new Capture(15000)
       const stderr = new Capture(5000)
@@ -90,6 +103,7 @@ export const BashTool: ToolDef<typeof inputSchema, Output> = {
       const kill = (signal: NodeJS.Signals) => {
         try {
           if (pid && !isWindows) process.kill(-pid, signal)
+          else if (pid) spawn('taskkill', taskkill(pid), { stdio: 'ignore', windowsHide: true }).on('error', () => { try { proc.kill(signal) } catch {} })
           else proc.kill(signal)
         } catch {}
       }

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { allTools } from '../tools/registry.js'
+import { shellPromptLine } from '../tools/shell.js'
 import { skillIndex } from './skills.js'
 import { ENGINEERING_STANDARDS } from '../skills/builtin.js'
 import { readMemory } from './memory.js'
@@ -126,7 +127,7 @@ export function buildSystemPrompt(cwd: string): string {
     'Environment:',
     `Current directory: ${cwd}`,
     `Platform: ${process.platform}`,
-    `Shell: ${process.env.SHELL || process.env.COMSPEC || 'bash'}`,
+    shellPromptLine(),
     `Date: ${new Date().toISOString().split('T')[0]}`,
   ]
 

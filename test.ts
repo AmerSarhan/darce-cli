@@ -7,9 +7,10 @@
  * token estimation, cost tracker, model router, context builder.
  */
 
+import './test-home.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readFileSync, unlinkSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readFileSync, unlinkSync, existsSync, mkdirSync, writeFileSync, mkdtempSync, utimesSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 
 // --- Imports from src ---
@@ -878,6 +879,9 @@ async function runTests() {
   await testToolStability()
   await testStability()
   await testStartupSafety()
+  await testShellAndSearch()
+  await testDerbyCleanup()
+  await testUiPerf()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -1967,4 +1971,236 @@ async function testStartupSafety() {
     return new Promise<boolean>(ok => { const s = net.createServer().once('error', () => ok(false)).listen(Number(url.port), '127.0.0.1', () => s.close(() => ok(true))) })
   })
   try { rmSync(home, { recursive: true, force: true }) } catch { /* cleaned with TMP_DIR */ }
+}
+
+// ============================================================
+// Shell picker (Windows choices checked with injected probes), Grep and Glob on real projects
+// ============================================================
+
+async function testShellAndSearch() {
+  const { pickShell, shellInvocation, shellPromptLine } = await import('./src/tools/shell.js')
+  const { spawnSync } = await import('node:child_process')
+  const { chmodSync, mkdirSync: mk, writeFileSync: wf } = await import('node:fs')
+  const probe = (platform: NodeJS.Platform, env: Record<string, string>, files: string[]) =>
+    ({ platform, env, exists: (p: string) => files.some(f => f.toLowerCase() === p.toLowerCase()) })
+
+  await test('Shell: POSIX uses an executable $SHELL with -c, as before', () => {
+    const s = pickShell(probe('darwin', { SHELL: '/bin/zsh' }, ['/bin/zsh', '/bin/bash']))
+    const inv = shellInvocation('echo hi', s)
+    return s.file === '/bin/zsh' && inv.file === '/bin/zsh' && inv.args.join(' ') === '-c echo hi' && !inv.windowsVerbatimArguments && shellPromptLine(s) === 'Shell: zsh'
+  })
+  await test('Shell: POSIX falls back to /bin/bash, then /bin/sh, when $SHELL is unset or not executable', () =>
+    pickShell(probe('linux', {}, ['/bin/bash', '/bin/sh'])).file === '/bin/bash'
+    && pickShell(probe('linux', { SHELL: '/usr/bin/fish' }, ['/bin/sh'])).file === '/bin/sh'
+    && shellInvocation('ls', pickShell(probe('linux', {}, ['/bin/sh']))).args.join(' ') === '-c ls')
+  await test('Shell: Windows prefers Git Bash and never WSL bash', () => {
+    const git = 'C:\\Program Files\\Git\\bin\\bash.exe'
+    const wsl = 'C:\\Windows\\System32\\bash.exe'
+    const env = { PATH: 'C:\\Windows\\System32;C:\\Tools', ComSpec: 'C:\\Windows\\System32\\cmd.exe' }
+    const a = pickShell(probe('win32', env, [wsl, git]))
+    const viaPath = pickShell(probe('win32', { PATH: 'C:\\Windows\\System32;C:\\Tools' }, [wsl, 'C:\\Tools\\bash.exe']))
+    const viaShell = pickShell(probe('win32', { SHELL: 'D:\\git\\usr\\bin\\bash.exe' }, ['D:\\git\\usr\\bin\\bash.exe', git]))
+    const wslOnly = pickShell(probe('win32', { PATH: 'C:\\Windows\\System32;C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps', SHELL: wsl }, [wsl, 'C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe']))
+    return a.file === git && a.kind === 'posix' && shellInvocation('ls -la', a).args.join(' ') === '-c ls -la' && shellPromptLine(a) === 'Shell: bash'
+      && viaPath.file === 'C:\\Tools\\bash.exe' && viaShell.file === 'D:\\git\\usr\\bin\\bash.exe' && wslOnly.kind === 'cmd'
+  })
+  await test('Shell: Windows without Git Bash uses pwsh, then Windows PowerShell, then cmd', () => {
+    const pwsh = pickShell(probe('win32', { PATH: 'C:\\Program Files\\PowerShell\\7', SystemRoot: 'C:\\Windows' }, ['C:\\Program Files\\PowerShell\\7\\pwsh.exe', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe']))
+    const ps = pickShell(probe('win32', { SystemRoot: 'C:\\Windows' }, ['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe']))
+    const cmd = pickShell(probe('win32', { ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, []))
+    const pi = shellInvocation('Get-ChildItem', ps)
+    const ci = shellInvocation('dir "a b"', cmd)
+    return pwsh.file.endsWith('pwsh.exe') && pwsh.kind === 'powershell'
+      && ps.file.endsWith('powershell.exe') && pi.args.join(' ') === '-NoProfile -NonInteractive -Command Get-ChildItem' && !pi.windowsVerbatimArguments
+      && shellPromptLine(ps) === 'Shell: PowerShell (use PowerShell syntax)'
+      && cmd.file === 'C:\\Windows\\system32\\cmd.exe' && ci.args.join(' ') === '/d /s /c "dir "a b""' && ci.windowsVerbatimArguments === true
+      && shellPromptLine(cmd) === 'Shell: cmd.exe (use cmd syntax)'
+  })
+  await test('Shell: the system prompt names the shell Bash runs in', () => {
+    resetContext()
+    return buildSystemPrompt(process.cwd()).includes(`\n${shellPromptLine()}\n`)
+  })
+
+  // Grep: same assertions for rg and the grep fallback; rg-only behaviour is skipped without rg
+  const hasRg = spawnSync('rg', ['--version'], { stdio: 'ignore' }).status === 0
+  const backend = hasRg ? 'rg' : 'grep'
+  const proj = join(TMP_DIR, 'grep-proj')
+  const put = (p: string, s: string) => { mk(join(proj, p, '..'), { recursive: true }); wf(join(proj, p), s) }
+  put('src/a.ts', 'const a = 1\n-flag here\nNEEDLE upper\n')
+  put('src/b.js', 'needle in js\n')
+  put('node_modules/somepkg/index.js', 'needle in dep\n')
+  put('.git/config', 'needle in git\n')
+  put('dist/out.js', 'needle in dist\n')
+  put('pkg/dist/x.js', 'needle nested dist\n')
+  for (let i = 0; i < 40; i++) put(`many/f${i}.txt`, Array.from({ length: 100 }, (_, j) => `needle ${j} ${'z'.repeat(40)}`).join('\n'))
+  const grep = async (input: { pattern: string; path?: string; glob?: string }) => (await GrepTool.call(input, makeCtx(proj))).data
+  if (!hasRg) record('Grep: rg not on PATH, so these ran against the grep fallback', true, 'skipped rg')
+
+  await test(`Grep (${backend}): a pattern starting with '-' is a pattern, not an option`, async () => /a\.ts:2:-flag here/.test(await grep({ pattern: '-flag' })))
+  await test(`Grep (${backend}): a search inside node_modules finds files there`, async () => /somepkg\/index\.js:1:needle in dep/.test(await grep({ pattern: 'needle', path: 'node_modules/somepkg' })))
+  await test(`Grep (${backend}): a normal search skips node_modules, .git and dist`, async () => {
+    const out = await grep({ pattern: 'needle', path: '.', glob: '*.js' })
+    const all = await grep({ pattern: 'needle in' })
+    return /src\/b\.js/.test(out) && !/node_modules|dist\//.test(out) && /src\/b\.js/.test(all) && !/node_modules|\.git\/|dist\//.test(all)
+  })
+  await test(`Grep (${backend}): a glob with a folder, like dist/*.js, matches from the searched path`, async () => {
+    const top = await grep({ pattern: 'needle', glob: 'dist/*.js' })
+    const sub = await grep({ pattern: 'needle', path: 'pkg', glob: 'dist/*.js' })
+    // grep's --include only sees file names, so only rg leaves out src/b.js
+    return /\/dist\/out\.js:1:/.test(top) && /pkg\/dist\/x\.js:1:/.test(sub) && (!hasRg || !/src\//.test(top + sub))
+  })
+  await test(`Grep (${backend}): (?i) is case-insensitive`, async () => {
+    const out = await grep({ pattern: '(?i)needle', path: 'src' })
+    return /NEEDLE upper/.test(out) && /needle in js/.test(out)
+  })
+  await test(`Grep (${backend}): output is capped at a line break`, async () => {
+    const out = await grep({ pattern: 'needle', path: 'many' })
+    const lines = out.split('\n')
+    return out.length <= 30100 && /more matches/.test(lines.at(-1)!) && lines.slice(0, -1).every(l => /f\d+\.txt:\d+:needle \d+ z{40}$/.test(l))
+  })
+  await test(`Grep (${backend}): an unreadable file doesn't hide the other matches`, async () => {
+    if (process.getuid?.() === 0 || process.platform === 'win32') return true // root reads anything; no chmod on Windows
+    put('locked/a.ts', 'needle\n'); put('locked/b.ts', 'needle\n'); chmodSync(join(proj, 'locked/b.ts'), 0)
+    const r = await GrepTool.call({ pattern: 'needle', path: 'locked' }, makeCtx(proj))
+    chmodSync(join(proj, 'locked/b.ts'), 0o644)
+    return !r.isError && /a\.ts:1:needle/.test(r.data) && /could not be searched/.test(r.data)
+  })
+
+  await test('Glob: a pattern naming node_modules or dist finds files there; others skip them', async () => {
+    const dep = await GlobTool.call({ pattern: 'node_modules/somepkg/*.js' }, makeCtx(proj))
+    const dist = await GlobTool.call({ pattern: 'dist/*.js' }, makeCtx(proj))
+    const js = await GlobTool.call({ pattern: '**/*.js' }, makeCtx(proj))
+    return dep.data.join() === 'node_modules/somepkg/index.js' && dist.data.join() === 'dist/out.js' && js.data.join() === 'src/b.js'
+  })
+}
+
+// ============================================================
+// Derby: worktrees never outlive a race
+// ============================================================
+
+async function testDerbyCleanup() {
+  const repo = join(TMP_DIR, 'derby-cleanup')
+  mkdirSync(repo, { recursive: true })
+  writeFileSync(join(repo, 'a.txt'), '1\n')
+  execSync('git init -q && git add -A && git commit -qm init', { cwd: repo })
+  const head = execSync('git rev-parse HEAD', { cwd: repo, encoding: 'utf-8' }).trim()
+  const worktrees = () => execSync('git worktree list', { cwd: repo, encoding: 'utf-8' }).trim().split('\n').length - 1
+  registerAllTools()
+
+  await test('Derby: worktrees left by a crashed session are cleared before the next race', () => {
+    const stale = mkdtempSync(join(tmpdir(), 'darce-derby-'))
+    execSync(`git worktree add --detach -q ${stale} ${head}`, { cwd: repo })
+    const old = new Date(Date.now() - 7 * 3600_000)
+    utimesSync(stale, old, old)
+    new Derby(repo, head, [], () => {}).cleanup()
+    return worktrees() === 0 && !existsSync(stale)
+  })
+
+  await test('Derby: cleanup during a race waits for the racers, then removes their worktrees', async () => {
+    const slow = {
+      async *stream(_m: unknown, _model: string, _t: unknown, signal?: AbortSignal) {
+        yield { type: 'request_start' }
+        await new Promise(r => { const t = setTimeout(r, 1500); signal?.addEventListener('abort', () => { clearTimeout(t); r(null) }) })
+      },
+      async listModels() { return [] },
+    }
+    const d = new Derby(repo, head, ['m/a', 'm/b'], () => {})
+    const run = d.run('task', [], slow as any)
+    await new Promise(r => setTimeout(r, 400))
+    const during = worktrees()
+    d.cleanup()
+    const right = worktrees()
+    await run
+    return during === 2 && right === 2 && worktrees() === 0
+  })
+
+  await test('Derby: defaults race the newest flagship from each lab', () => {
+    const r = defaultRacers('anthropic/claude-haiku-5.5')
+    return r.includes('openai/gpt-6.1-sol') && !r.includes('openai/gpt-5.6-sol') && r.length === 3
+  })
+}
+
+// ============================================================
+// UI performance: big pastes, bounded prompt, lazy startup
+// ============================================================
+
+async function testUiPerf() {
+  const { isBigPaste, pasteToken, expandPastes } = await import('./src/ui/input/pastes.js')
+  const { promptWindow, Prompt } = await import('./src/ui/Prompt.js')
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i}`).join('\n')
+
+  await test('Paste: only pastes over 12 lines or 2,000 characters become a token', () =>
+    !isBigPaste(lines(12)) && isBigPaste(lines(13)) && !isBigPaste('x'.repeat(2000)) && isBigPaste('x'.repeat(2001)))
+
+  await test('Paste: tokens name the paste and its size', () =>
+    pasteToken(1, lines(3012)) === '[Pasted text #1: 3,012 lines]' && pasteToken(2, 'x'.repeat(2500)) === '[Pasted text #2: 2,500 chars]')
+
+  await test('Paste: each token expands to its own paste; a token broken by editing stays as typed', () => {
+    const a = lines(20), b = lines(30)
+    const pastes = new Map([[pasteToken(1, a), a], [pasteToken(2, b), b]])
+    return expandPastes('fix [Pasted text #1: 20 lines] then [Pasted text #2: 30 lines]', pastes) === `fix ${a} then ${b}`
+      && expandPastes('see [Pasted text #1: 20 line', pastes) === 'see [Pasted text #1: 20 line'
+      && expandPastes('a $& [Pasted text #1: 20 lines]', new Map([[pasteToken(1, a), '$&$1']])) === 'a $& $&$1'
+  })
+
+  await test('Paste: backspace and delete remove a whole token, other keys edit as before', () => {
+    const tok = '[Pasted text #1: 20 lines]'
+    const back = run([{ type: 'insert', text: `see ${tok}` }, { type: 'backspace' }])
+    const del = run([{ type: 'insert', text: `${tok} x` }, { type: 'lineStart' }, { type: 'delete' }])
+    const plain = run([{ type: 'insert', text: 'see ]' }, { type: 'backspace' }])
+    const inside = run([{ type: 'insert', text: tok }, { type: 'left' }, { type: 'backspace' }])
+    return back.text === 'see ' && back.cursor === 4 && del.text === ' x' && plain.text === 'see ' && inside.text === '[Pasted text #1: 20 line]'
+  })
+
+  await test('Paste: history keeps the text as sent, so Up recalls the paste itself', () => {
+    const body = lines(20)
+    const s = run([{ type: 'insert', text: 'fix [Pasted text #1: 20 lines]' }, { type: 'commit', entry: `fix ${body}` }, { type: 'up' }])
+    return s.history[0] === `fix ${body}` && s.text === `fix ${body}`
+  })
+
+  await test('Prompt: a 3,000-line buffer shows a window around the cursor', () => {
+    const e = run([{ type: 'insert', text: lines(3000) }])
+    const end = promptWindow(e, 20, 80)
+    const mid = promptWindow({ ...e, cursor: e.text.indexOf('line 1500') }, 20, 80)
+    const small = promptWindow(run([{ type: 'insert', text: lines(5) }]), 20, 80)
+    return end.lines.length === 18 && end.end === 3000 && end.start === 2982 && end.lines[end.line] === 'line 2999'
+      && mid.lines[mid.line] === 'line 1500' && mid.start > 1490 && mid.end <= 1510
+      && small.start === 0 && small.lines.length === 5
+  })
+
+  await test('Prompt: a single huge line shows the stretch around the cursor', () => {
+    const text = 'a'.repeat(50_000) + 'X' + 'b'.repeat(50_000)
+    const w = promptWindow({ ...emptyEditor(), text, cursor: 50_000 }, 20, 80)
+    return w.lines.length === 1 && w.lines[0]!.length <= 18 * 80 && w.lines[0]![w.col] === 'X'
+  })
+
+  await test('Prompt: renders no taller than half the terminal, with "more lines" markers', async () => {
+    const { renderToString } = await import('ink')
+    const { createElement } = await import('react')
+    const e = run([{ type: 'insert', text: lines(3000) }])
+    const out = renderToString(createElement(Prompt, { editor: { ...e, cursor: e.text.indexOf('line 1500') }, busy: false }), { columns: 100 })
+    const rows = out.split('\n')
+    const n = (r: string) => Number(/… ([\d,]+) more lines/.exec(r)?.[1]?.replace(',', '') ?? -1)
+    return rows.length <= 12 && rows.some(r => r.includes('line 1500')) && n(rows[0]!) > 1490 && n(rows.at(-1)!) > 1490 && n(rows[0]!) + n(rows.at(-1)!) + rows.length - 2 === 3000
+  })
+
+  await test('Startup: the highlighter loads on first use; code renders plain until then, highlighted after', async () => {
+    const { highlightCode, loadHighlighter, highlighterReady } = await import('./src/ui/highlight.js')
+    const code = 'const a: number = 1'
+    const before = highlighterReady() ? null : renderTerminalMarkdown('```ts\n' + code + '\n```', 80)
+    await loadHighlighter()
+    const { highlight } = await import('cli-highlight')
+    const expected = highlight(code, { language: 'ts', ignoreIllegals: true })
+    const after = renderTerminalMarkdown('```ts\n' + code + '\n```', 80)
+    return (before === null || before.includes(code)) && after.includes(expected) && highlightCode(code, 'ts') === expected
+      && highlightCode('x', 'not-a-language') === 'x' && highlightCode('x', undefined) === 'x'
+  })
+
+  await test('Startup: /taste, /brain, voice and cli-highlight are not imported statically by the UI', () => {
+    const statics = (f: string) => [...readFileSync(f, 'utf-8').matchAll(/^import (?!type )[^\n]*from '([^']+)'/gm)].map(m => m[1]!)
+    const repl = statics('src/ui/REPL.tsx')
+    const lazy = ['../taste/studio.js', '../taste/scan.js', '../brain/server.js', '../core/voice.js']
+    const ui = ['src/ui/markdownRender.ts', 'src/ui/DiffView.tsx', 'src/ui/Markdown.tsx', 'src/ui/transcript.tsx'].flatMap(statics)
+    return repl.length > 10 && !repl.some(m => lazy.includes(m)) && !ui.includes('cli-highlight') && !repl.includes('cli-highlight')
+  })
 }

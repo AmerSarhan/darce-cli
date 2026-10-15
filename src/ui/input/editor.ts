@@ -1,5 +1,6 @@
 // Pure text-buffer model for the prompt: cursor movement, word motions,
 // kill/yank, multiline and history. No React — fully unit-testable.
+import { tokenEndingAt, tokenStartingAt } from './pastes.js'
 
 export type EditorState = {
   text: string
@@ -39,7 +40,7 @@ export type EditorAction =
   | { type: 'clear' }
   | { type: 'set'; text: string }
   | { type: 'replace'; start: number; end: number; text: string }
-  | { type: 'commit' } // after submit: push to history, reset
+  | { type: 'commit'; entry?: string } // after submit: push to history (entry: the text as sent, pastes expanded), reset
 
 const isWord = (ch: string | undefined) => !!ch && /[\p{L}\p{N}_]/u.test(ch)
 
@@ -84,10 +85,16 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
     }
     case 'newline':
       return splice(s, s.cursor, s.cursor, '\n')
-    case 'backspace':
+    case 'backspace': {
+      // A paste token goes in one key, and its paste with it
+      const token = tokenEndingAt(s.text, s.cursor)
+      if (token !== -1) return splice(s, token, s.cursor, '')
       return s.cursor > 0 ? splice(s, s.cursor - 1, s.cursor, '') : s
-    case 'delete':
-      return s.cursor < s.text.length ? { ...s, text: s.text.slice(0, s.cursor) + s.text.slice(s.cursor + 1) } : s
+    }
+    case 'delete': {
+      const end = Math.max(tokenStartingAt(s.text, s.cursor), s.cursor + 1)
+      return s.cursor < s.text.length ? { ...s, text: s.text.slice(0, s.cursor) + s.text.slice(end) } : s
+    }
     case 'left':
       return { ...s, cursor: Math.max(0, s.cursor - 1) }
     case 'right':
@@ -147,7 +154,7 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
     case 'replace':
       return { ...s, text: s.text.slice(0, a.start) + a.text + s.text.slice(a.end), cursor: a.start + a.text.length, historyIndex: -1 }
     case 'commit': {
-      const entry = s.text.trim()
+      const entry = (a.entry ?? s.text).trim()
       const history = entry && s.history[0] !== entry ? [entry, ...s.history].slice(0, 200) : s.history
       return { ...emptyEditor(history), killRing: s.killRing }
     }

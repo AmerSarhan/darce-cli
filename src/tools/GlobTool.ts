@@ -13,6 +13,17 @@ const inputSchema = z.object({
 
 type Input = z.infer<typeof inputSchema>
 
+const IGNORED_NAMES = new Set(DEEP_IGNORE.map(g => g.split('/')[1]))
+
+/** A pattern starting inside an ignored folder ("node_modules/react/*.json") asks for it: the walk starts there instead. */
+function ignoredBase(pattern: string): { base: string; rest: string } | null {
+  const parts = pattern.replace(/^\.\//, '').split('/')
+  let i = 0
+  while (i < parts.length - 1 && !/[*?[\]{}!()]/.test(parts[i]!)) i++
+  const base = parts.slice(0, i)
+  return base.some(p => IGNORED_NAMES.has(p)) ? { base: base.join('/'), rest: parts.slice(i).join('/') } : null
+}
+
 export const GlobTool: ToolDef<typeof inputSchema, string[]> = {
   name: 'Glob',
   description: 'Find files matching a glob pattern. Returns file paths sorted by modification time.',
@@ -25,13 +36,15 @@ export const GlobTool: ToolDef<typeof inputSchema, string[]> = {
     try {
       // Inside one repository, honour its .gitignore. Anywhere else (a folder full of projects) stream the
       // walk and stop early, so a broad pattern can't keep the CPU busy after the answer is in
-      const listed = existsSync(join(searchDir, '.git')) ? await gitFiles(searchDir, 200_000) : null
+      const explicit = ignoredBase(input.pattern)
+      const listed = !explicit && existsSync(join(searchDir, '.git')) ? await gitFiles(searchDir, 200_000) : null
       if (!listed) {
-        const { files, truncated } = await walk(searchDir, input.pattern, { max: 500, budgetMs: 10_000 })
+        const root = explicit ? join(searchDir, explicit.base) : searchDir
+        const { files, truncated } = await walk(root, explicit?.rest ?? input.pattern, { max: 500, budgetMs: 10_000 })
         if (truncated && files.length < 500) {
           return { data: [`Search took over 10s in ${input.path ?? 'this folder'}. Use a narrower path or pattern, e.g. path: "my-app/src".`], isError: true }
         }
-        return { data: files }
+        return { data: explicit ? files.map(f => `${explicit.base}/${f}`) : files }
       }
       // git's own file list already leaves out what .gitignore ignores; it can still name files deleted since the last commit
       const matches = picomatch(input.pattern.replace(/^\.\//, ''))

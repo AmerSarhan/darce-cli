@@ -2,7 +2,7 @@ import { Lexer, type Token, type Tokens } from 'marked'
 import { Chalk } from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import stringWidth from 'string-width'
-import { highlight, supportsLanguage } from 'cli-highlight'
+import { highlightCode } from './highlight.js'
 import { theme } from './theme.js'
 import { caps } from './termfx.js'
 
@@ -71,9 +71,7 @@ let plainCode = false
 function code(text: string, lang: string | undefined, width: number, indent: number): string {
   const t = theme()
   let body = text
-  if (!plainCode && lang && supportsLanguage(lang) && text.split('\n').length <= HIGHLIGHT_MAX_LINES) {
-    try { body = highlight(text, { language: lang, ignoreIllegals: true }) } catch {}
-  }
+  if (!plainCode && lang && text.split('\n').length <= HIGHLIGHT_MAX_LINES) body = highlightCode(text, lang)
   const bar = chalk.hex(t.faint)('│ ')
   const pad = ' '.repeat(indent)
   const label = lang ? `${pad}${chalk.hex(t.faint)(lang)}\n` : ''

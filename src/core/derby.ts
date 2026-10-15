@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, existsSync, symlinkSync, copyFileSync, mkdirSync, rmSync, unlinkSync, readFileSync, lstatSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, existsSync, symlinkSync, copyFileSync, mkdirSync, rmSync, unlinkSync, readFileSync, lstatSync, writeFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname, resolve, relative, isAbsolute } from 'node:path'
+import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path'
 import { query } from './query.js'
 import { toolRisk } from './risk.js'
 import { buildSystemPrompt } from './context.js'
@@ -38,9 +38,32 @@ function git(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024, timeout: 60_000 })
 }
 
+// The newest flagship from each lab (GPT-6.1 Sol is half the price of 5.6; Gemini 4 Argon replaces 3.1 Pro)
 export function defaultRacers(current: string, configured?: string[]): string[] {
-  const pool = configured?.length ? configured : [current, 'anthropic/claude-sonnet-5.5', 'openai/gpt-5.6-sol', 'google/gemini-3.1-pro-preview']
+  const pool = configured?.length ? configured : [current, 'anthropic/claude-sonnet-5.5', 'openai/gpt-6.1-sol', 'google/gemini-4-argon']
   return [...new Set(pool)].slice(0, 3)
+}
+
+// Races still holding worktrees: removed when Darce exits, even if the terminal is closed mid-race
+const live = new Set<Derby>()
+process.once('exit', () => { for (const d of live) d.cleanup(true) })
+
+const STALE_MS = 6 * 3600_000
+
+/** Worktrees left behind by a crashed or killed session (a race never runs this long). */
+function pruneStale(root: string) {
+  try {
+    for (const line of git(['worktree', 'list', '--porcelain'], root).split('\n')) {
+      if (!line.startsWith('worktree ')) continue
+      const dir = line.slice('worktree '.length)
+      if (!basename(dir).startsWith('darce-derby-')) continue
+      let age = Infinity
+      try { age = Date.now() - statSync(dir).mtimeMs } catch {}
+      if (age < STALE_MS) continue
+      try { git(['worktree', 'remove', '--force', dir], root) } catch { try { rmSync(dir, { recursive: true, force: true }) } catch {} }
+    }
+    git(['worktree', 'prune'], root)
+  } catch {}
 }
 
 export class Derby {
@@ -55,13 +78,24 @@ export class Derby {
     private onUpdate: () => void,
   ) {
     this.racers = models.map(m => ({ ...(typeof m === 'string' ? { model: m } : m), status: 'starting', activity: 'setting up', steps: 0, cost: 0, ms: 0, answer: '', diffs: [] }))
+    pruneStale(root)
+    live.add(this)
   }
+
+  private running: Promise<void> | null = null
+  private cleanupPending = false
 
   private mode: 'ask' | 'auto' | 'full' = 'auto'
 
   async run(task: string, history: Message[], provider: Provider, passEnv?: string[], mode: 'ask' | 'auto' | 'full' = 'auto'): Promise<void> {
     this.mode = mode
-    await Promise.all(this.racers.map(r => this.race(r, task, history, provider, passEnv)))
+    this.running = Promise.all(this.racers.map(r => this.race(r, task, history, provider, passEnv))).then(() => {})
+    try {
+      await this.running
+    } finally {
+      this.running = null
+      if (this.cleanupPending) this.cleanup()
+    }
   }
 
   private async race(r: Racer, task: string, history: Message[], provider: Provider, passEnv?: string[]) {
@@ -114,7 +148,7 @@ export class Derby {
       if (result.value.reason === 'aborted') r.status = 'stopped'
       else if (result.value.reason === 'error') { r.status = 'error'; r.error ??= 'request failed' }
       else r.status = 'done'
-      r.diffs = this.collectDiffs(r.dir)
+      if (!this.cleanupPending) r.diffs = this.collectDiffs(r.dir)
       r.activity = r.status
     } catch (err) {
       r.status = 'error'
@@ -216,7 +250,17 @@ export class Derby {
     return { files, merged, conflicts }
   }
 
-  cleanup() {
+  /**
+   * Remove the worktrees. While racers are still running it stops them and waits for them to finish,
+   * so a step mid-write never loses its folder; `now` (on exit) removes them right away.
+   */
+  cleanup(now = false) {
+    if (this.running && !now) {
+      this.cleanupPending = true
+      this.controller.abort()
+      return
+    }
+    live.delete(this)
     for (const r of this.racers) {
       if (!r.dir) continue
       try { git(['worktree', 'remove', '--force', r.dir], this.root) } catch {

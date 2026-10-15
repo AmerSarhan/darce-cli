@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text } from 'ink'
-import { highlight, supportsLanguage } from 'cli-highlight'
+import { highlightCode, useHighlighter } from './highlight.js'
 import { extname } from 'node:path'
 import { theme } from './theme.js'
 import type { FileDiff } from '../utils/diff.js'
@@ -16,23 +16,18 @@ const EXT_LANG: Record<string, string> = {
 }
 
 function languageFor(path: string): string | undefined {
-  const lang = EXT_LANG[extname(path).toLowerCase()] ?? (/dockerfile$/i.test(path) ? 'dockerfile' : undefined)
-  return lang && supportsLanguage(lang) ? lang : undefined
+  return EXT_LANG[extname(path).toLowerCase()] ?? (/dockerfile$/i.test(path) ? 'dockerfile' : undefined)
 }
 
 function colorize(code: string, lang?: string): string {
-  if (!lang || !code.trim()) return code
-  try {
-    return highlight(code, { language: lang, ignoreIllegals: true })
-  } catch {
-    return code
-  }
+  return code.trim() ? highlightCode(code, lang) : code
 }
 
 const MAX_LINES = 40
 
 export function DiffView({ diff, maxLines = MAX_LINES }: { diff: FileDiff; maxLines?: number }) {
   const t = theme()
+  useHighlighter()
   const lang = languageFor(diff.path)
   const width = String(Math.max(1, ...diff.hunks.flatMap(h => h.lines.map(l => l.newNo ?? l.oldNo ?? 0)))).length
 

@@ -5,11 +5,13 @@ import { Prompt } from './Prompt.js'
 import { StatusBar } from './StatusBar.js'
 import { ModelPicker } from './ModelPicker.js'
 import { Markdown } from './Markdown.js'
+import { highlighterReady, loadHighlighter } from './highlight.js'
 import { Spinner } from './Spinner.js'
 import { useAppState } from './App.js'
 import { theme } from './theme.js'
 import { splitStable, closeOpenFence, liveWindow } from './markdownStream.js'
-import { editorReducer, emptyEditor } from './input/editor.js'
+import { editorReducer, emptyEditor, normalizeInput } from './input/editor.js'
+import { isBigPaste, pasteToken, expandPastes } from './input/pastes.js'
 import { intentFor } from './input/keys.js'
 import { TranscriptItemView, newId, toolSummary, type TranscriptItem } from './transcript.js'
 import { query } from '../core/query.js'
@@ -40,8 +42,6 @@ import type { PlanDisplay } from '../types.js'
 import { Derby, defaultRacers } from '../core/derby.js'
 import { pickCritic, reviewEdit } from '../core/critic.js'
 import { setTasteEnabled, tasteEnabled } from '../taste/check.js'
-import { formatScan, scanTaste } from '../taste/scan.js'
-import { openStudioWindow, startStudio, stopStudio } from '../taste/studio.js'
 import { DEFAULT_GEARS, gearIndex, shiftGear, priceNote } from '../config/gears.js'
 import { createCheckout, openInBrowser } from '../core/billing.js'
 import { DISCORD_URL } from '../community.js'
@@ -63,9 +63,8 @@ import { addUsage, getTotalCost, getTotalTokens } from '../state/costTracker.js'
 import type { FileDiff } from '../utils/diff.js'
 import { saveGlobalSetting } from '../config/config.js'
 import { WHY_NOTE, wantsWhy } from '../core/context.js'
-import { Narrator, firstNameFromEmail, findPlayer, VOICE_NAMES } from '../core/voice.js'
+import type { Narrator, VoiceEvent } from '../core/voice.js'
 import { brain } from '../brain/bus.js'
-import { startBrain, stopBrain } from '../brain/server.js'
 import { projectPath } from '../brain/graph.js'
 import { resolve as resolvePathAbs } from 'node:path'
 import { runThread, Mutex, type Thread } from '../core/threads.js'
@@ -142,7 +141,12 @@ function undoLines(r: { restored: string[]; removed: string[]; kept?: string[]; 
 
 export function REPL({ provider, initialPrompt, restored }: Props) {
   const { state, setState } = useAppState()
-  const { exit } = useApp()
+  const { exit: inkExit } = useApp()
+  // Quitting must always work: if anything holds the process open after Ink unmounts, end it anyway
+  const exit = useCallback(() => {
+    inkExit()
+    setTimeout(() => process.exit(0), 1500).unref()
+  }, [inkExit])
   const { write } = useStdout()
   const t = theme()
 
@@ -161,16 +165,25 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const [items, setItems] = useState<TranscriptItem[]>([])
   const [introDone, setIntroDone] = useState(false)
   const [accountReady, setAccountReady] = useState(false)
+  const finishingIntro = useRef(false)
   const finishIntro = useCallback(() => {
-    if (introDone) return
-    setIntroDone(true)
-    const initial: TranscriptItem[] = [banner()]
-    if (restored?.length) {
-      initial.push(...itemsFromMessages(restored))
-      initial.push({ kind: 'system', id: newId(), text: `Resumed session ${state.sessionId.slice(0, 8)} (${restored.length} messages).` })
+    if (introDone || finishingIntro.current) return
+    finishingIntro.current = true
+    const finish = () => {
+      setIntroDone(true)
+      const initial: TranscriptItem[] = [banner()]
+      if (restored?.length) {
+        initial.push(...itemsFromMessages(restored))
+        initial.push({ kind: 'system', id: newId(), text: `Resumed session ${state.sessionId.slice(0, 8)} (${restored.length} messages).` })
+      }
+      setItems(prev => [...initial, ...prev])
     }
-    setItems(prev => [...initial, ...prev])
+    // Resumed messages are printed once, for good: give their code blocks the highlighter first
+    if (restored?.length && !highlighterReady()) void loadHighlighter().then(finish)
+    else finish()
   }, [introDone, restored, state.sessionId])
+  // Code blocks are highlighted from the first reply on; the import waits until the intro has drawn
+  useEffect(() => { if (introDone) void loadHighlighter() }, [introDone])
   const [staticKey, setStaticKey] = useState(0)
   const [editor, rawDispatch] = useReducer(editorReducer, undefined, () => emptyEditor(loadHistory()))
   // Several key events can arrive before React re-renders (a slow frame, SSH, dictation): the ref always
@@ -186,7 +199,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   busyRef.current = busy
   const [activity, setActivity] = useState<Activity | null>(null)
   const [tail, setTail] = useState('')
-  const [queue, setQueue] = useState<string[]>([])
+  const [queue, setQueue] = useState<{ text: string; shown?: string }[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [showSessions, setShowSessions] = useState(false)
   const [hint, setHint] = useState<string | undefined>()
@@ -217,6 +230,9 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const suggestRef = useRef(suggestOn)
   suggestRef.current = suggestOn
   const imageCounter = useRef(0)
+  // Big pastes by their [Pasted text #N: …] token; expanded into the message when it's sent
+  const pastesRef = useRef(new Map<string, string>())
+  const pasteCounter = useRef(0)
 
   useEffect(() => { projectFiles(state.cwd) }, [state.cwd])
 
@@ -248,18 +264,27 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const voiceRef = useRef(voiceOn)
   voiceRef.current = voiceOn
   const voiceIdRef = useRef(state.config.voiceId || 'erik')
-  const voiceNameRef = useRef(state.config.voiceName || firstNameFromEmail(listAccounts().active))
+  // Voice code loads with the first /voice or the first line spoken, not at startup
+  const voiceNameRef = useRef<string | null>(null) // null until the voice module has loaded
   const narratorRef = useRef<Narrator | null>(null)
-  if (!narratorRef.current) {
-    narratorRef.current = new Narrator({
+  const voiceModRef = useRef<Promise<typeof import('../core/voice.js')> | null>(null)
+  const loadVoice = useCallback(() => voiceModRef.current ??= import('../core/voice.js').then(m => {
+    voiceNameRef.current ??= state.config.voiceName || m.firstNameFromEmail(listAccounts().active)
+    narratorRef.current ??= new m.Narrator({
       apiKey: state.config.apiKey,
       apiBase: state.config.apiBase || 'https://api.darce.dev',
-      name: () => voiceNameRef.current,
+      name: () => voiceNameRef.current ?? '',
       voice: () => voiceIdRef.current,
     })
-  }
+    narratorRef.current.onLine = line => brain.emit('voice', { line })
+    return m
+  }), [])
+  const narrate = useMemo(() => ({
+    say: (event: VoiceEvent, context: string) => { void loadVoice().then(() => narratorRef.current?.say(event, context)) },
+    stop: () => narratorRef.current?.stop(),
+  }), [loadVoice])
+  useEffect(() => { if (voiceOn && introDone) void loadVoice() }, [voiceOn, introDone, loadVoice])
   useEffect(() => () => narratorRef.current?.stop(), [])
-  if (narratorRef.current) narratorRef.current.onLine = line => brain.emit('voice', { line })
   learnRef.current = learnOn
   const lastEsc = useRef(0)
   const [tainted, setTainted] = useState(false)
@@ -389,7 +414,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const fileStats = new Map<string, { path: string; added: number; removed: number; created: boolean }>()
     const checkpointsAtStart = checkpointsRef.current?.count ?? 0
     // Voice: a line when a task turns out to be long, when something runs a while, when Darce needs you, and at the end
-    const voice = voiceRef.current ? narratorRef.current : null
+    const voice = voiceRef.current ? narrate : null
     const spoke = { start: false, progress: false, error: false }
     const did: string[] = []
     let lastText = ''
@@ -1033,16 +1058,16 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       return
     }
     if (result?.startsWith('__BRAIN__:')) {
-      if (result.slice(10).trim() === 'stop') { stopBrain(); commit({ kind: 'system', id: newId(), text: 'Brain view closed.' }); return }
+      if (result.slice(10).trim() === 'stop') { void import('../brain/server.js').then(m => m.stopBrain()); commit({ kind: 'system', id: newId(), text: 'Brain view closed.' }); return }
       const cps = checkpointsRef.current!
-      void startBrain({
+      void import('../brain/server.js').then(m => m.startBrain({
         cwd: state.cwd,
         model: () => modelRef.current,
         gitRoot: () => cps.gitRoot,
         timeline: () => cps.list().map(c => ({ n: c.n, label: c.label, at: c.at })),
         stepDiff: i => cps.stepDiff(i),
         sessionDiff: () => cps.sessionDiff(),
-      }).then(url => {
+      })).then(url => {
         openInBrowser(url)
         commit({ kind: 'system', id: newId(), text: `Brain view: ${url}\nA live map of this project. Watch Darce read and change files as it works; the timeline at the bottom replays every step. It runs on this computer only. /brain stop closes it.` })
       }).catch(err => commit({ kind: 'error', id: newId(), text: `Couldn't start the brain view: ${(err as Error).message}` }))
@@ -1051,26 +1076,28 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (result?.startsWith('__VOICE__:')) {
       const arg = result.slice(10).trim()
       const lower = arg.toLowerCase()
-      const narrator = narratorRef.current!
-      narrator.onLimit = message => { commit({ kind: 'system', id: newId(), text: `Voice: ${message}` }); setVoiceOn(false); saveGlobalSetting('voice', false) }
-      if (lower.startsWith('name ')) {
-        voiceNameRef.current = arg.slice(5).trim().slice(0, 24)
-        saveGlobalSetting('voiceName', voiceNameRef.current)
-        commit({ kind: 'system', id: newId(), text: voiceNameRef.current ? `Darce will call you ${voiceNameRef.current}.` : 'Darce won\'t use your name.' })
-        return
-      }
-      const pick = (VOICE_NAMES as readonly string[]).includes(lower) ? lower : null
-      if (pick) { voiceIdRef.current = pick; saveGlobalSetting('voiceId', pick) }
-      const on = pick ? true : lower === 'on' ? true : lower === 'off' ? false : !voiceOn
-      setVoiceOn(on)
-      saveGlobalSetting('voice', on)
-      if (!on) { narrator.stop(); commit({ kind: 'system', id: newId(), text: 'Voice off. Turn it back on with /voice on.' }); return }
-      if (!findPlayer()) {
-        commit({ kind: 'system', id: newId(), text: process.platform === 'linux' ? 'Voice is on, but there\'s no audio player to play it with. Install one, for example: sudo apt install mpg123' : 'Voice is on, but no audio player was found on this machine.' })
-        return
-      }
-      commit({ kind: 'system', id: newId(), text: `Voice on (${voiceIdRef.current}${voiceNameRef.current ? `, calling you ${voiceNameRef.current}` : ''}). Darce speaks up when a task runs long, when it needs you, and when it's done. Quick tasks stay quiet. Voices: ${VOICE_NAMES.join(', ')} · /voice name <first name> · /voice off` })
-      narrator.say('hello', 'The developer just switched voice on.')
+      void loadVoice().then(({ VOICE_NAMES, findPlayer }) => {
+        const narrator = narratorRef.current!
+        narrator.onLimit = message => { commit({ kind: 'system', id: newId(), text: `Voice: ${message}` }); setVoiceOn(false); saveGlobalSetting('voice', false) }
+        if (lower.startsWith('name ')) {
+          voiceNameRef.current = arg.slice(5).trim().slice(0, 24)
+          saveGlobalSetting('voiceName', voiceNameRef.current)
+          commit({ kind: 'system', id: newId(), text: voiceNameRef.current ? `Darce will call you ${voiceNameRef.current}.` : 'Darce won\'t use your name.' })
+          return
+        }
+        const pick = (VOICE_NAMES as readonly string[]).includes(lower) ? lower : null
+        if (pick) { voiceIdRef.current = pick; saveGlobalSetting('voiceId', pick) }
+        const on = pick ? true : lower === 'on' ? true : lower === 'off' ? false : !voiceOn
+        setVoiceOn(on)
+        saveGlobalSetting('voice', on)
+        if (!on) { narrator.stop(); commit({ kind: 'system', id: newId(), text: 'Voice off. Turn it back on with /voice on.' }); return }
+        if (!findPlayer()) {
+          commit({ kind: 'system', id: newId(), text: process.platform === 'linux' ? 'Voice is on, but there\'s no audio player to play it with. Install one, for example: sudo apt install mpg123' : 'Voice is on, but no audio player was found on this machine.' })
+          return
+        }
+        commit({ kind: 'system', id: newId(), text: `Voice on (${voiceIdRef.current}${voiceNameRef.current ? `, calling you ${voiceNameRef.current}` : ''}). Darce speaks up when a task runs long, when it needs you, and when it's done. Quick tasks stay quiet. Voices: ${VOICE_NAMES.join(', ')} · /voice name <first name> · /voice off` })
+        narrator.say('hello', 'The developer just switched voice on.')
+      })
       return
     }
     if (result?.startsWith('__LEARN__:')) {
@@ -1132,14 +1159,16 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           : 'Taste check off. /taste still opens the studio when you ask.' })
         return
       }
-      if (arg === 'stop') { stopStudio(); commit({ kind: 'system', id: newId(), text: 'Taste studio closed.' }); return }
+      if (arg === 'stop') { void import('../taste/studio.js').then(m => m.stopStudio()); commit({ kind: 'system', id: newId(), text: 'Taste studio closed.' }); return }
       // A plain-text report, for when there's no browser or you want it in the terminal
       if (arg === 'list' || arg.startsWith('list ')) {
-        try { commit({ kind: 'system', id: newId(), text: formatScan(scanTaste(state.cwd, arg.slice(4).trim())) + (tasteEnabled() ? '' : '\n(Checks on edits are off. /taste on turns them back on.)') }) }
-        catch (err) { commit({ kind: 'error', id: newId(), text: (err as Error).message }) }
+        void import('../taste/scan.js').then(({ formatScan, scanTaste }) => {
+          try { commit({ kind: 'system', id: newId(), text: formatScan(scanTaste(state.cwd, arg.slice(4).trim())) + (tasteEnabled() ? '' : '\n(Checks on edits are off. /taste on turns them back on.)') }) }
+          catch (err) { commit({ kind: 'error', id: newId(), text: (err as Error).message }) }
+        })
         return
       }
-      void startStudio({
+      void import('../taste/studio.js').then(m => m.startStudio({
         cwd: state.cwd,
         fix: (prompt, shown) => runQuery(prompt, '', [], shown),
         busy: () => busyRef.current,
@@ -1153,9 +1182,9 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         },
         say: text => commit({ kind: 'system', id: newId(), text }),
       }, arg).then(url => {
-        openStudioWindow(url, openInBrowser)
+        m.openStudioWindow(url, openInBrowser)
         commit({ kind: 'system', id: newId(), text: `Taste studio is opening in its own window. It renders your page, pins what looks generated, and you choose what Darce fixes.\n${url}` })
-      }).catch(err => commit({ kind: 'error', id: newId(), text: `Couldn't start the taste studio: ${(err as Error).message}` }))
+      })).catch(err => commit({ kind: 'error', id: newId(), text: `Couldn't start the taste studio: ${(err as Error).message}` }))
       return
     }
     if (result?.startsWith('__CRITIC__:')) {
@@ -1187,7 +1216,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (busy || queue.length === 0) return
     const [next, ...rest] = queue
     setQueue(rest)
-    void runQuery(next!)
+    void runQuery(next!.text, '', [], next!.shown)
   }, [busy, queue, runQuery])
 
   // Initial prompt from the command line
@@ -1377,10 +1406,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           dispatch({ type: 'newline' })
           return
         }
-        const text = editor.text.trim()
+        // History keeps the text as sent, so Up recalls the paste itself (its token means nothing next session)
+        const typed = editor.text.trim()
+        const text = expandPastes(editor.text, pastesRef.current).trim()
         if (!text) return
-        const next = editorReducer(editor, { type: 'commit' })
-        dispatch({ type: 'commit' })
+        const shown = typed !== text ? typed : undefined
+        pastesRef.current.clear()
+        const next = editorReducer(editor, { type: 'commit', entry: text })
+        dispatch({ type: 'commit', entry: text })
         saveHistory(next.history)
         if (text.startsWith('/')) {
           if (busy && !/^\/(help|cost)\b/.test(text)) {
@@ -1391,13 +1424,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           return
         }
         if (busy) {
-          setQueue(q => [...q, text])
+          setQueue(q => [...q, { text, shown }])
           return
         }
-        const used = attachments.filter(a => text.includes(`[Image #${a.n}]`))
+        const used = attachments.filter(a => typed.includes(`[Image #${a.n}]`))
         const images: ImageContent[] = used.map(a => ({ type: 'image', mediaType: a.mediaType, data: toBase64(a), name: a.name }))
         setAttachments([])
-        void runQuery(text, attachMentions(text), images)
+        void runQuery(text, attachMentions(text), images, shown)
         return
       }
       case 'edit':
@@ -1418,6 +1451,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         imageCounter.current = a.n
         addImage(a)
       }
+      return
+    }
+    const clean = normalizeInput(text)
+    if (isBigPaste(clean)) {
+      const token = pasteToken(++pasteCounter.current, clean)
+      pastesRef.current.set(token, clean)
+      dispatch({ type: 'insert', text: token })
       return
     }
     dispatch({ type: 'insert', text })
@@ -1464,7 +1504,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         {derby ? <DerbyBoard task={derby.task} racers={derby.d.racers} selected={derby.selected} finished={derby.finished} variant={derby.variant} /> : null}
 
         {queue.map((q, i) => (
-          <Text key={i} color={t.faint}>↳ queued: {q.split('\n')[0]}</Text>
+          <Text key={i} color={t.faint}>↳ queued: {(q.shown ?? q.text).split('\n')[0]}</Text>
         ))}
 
         {showPicker && (

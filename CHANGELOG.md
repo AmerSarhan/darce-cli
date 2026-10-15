@@ -2,6 +2,22 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.17.0
+
+- **Windows: shell commands work.** Without Git Bash, every command used to fail, because Darce ran `cmd.exe -c`, a flag cmd doesn't have. Darce now picks Git Bash, then PowerShell, then cmd, with each one's own syntax, and tells the model which shell it's in. Timeouts and Esc stop the whole process tree. (Tested with simulated Windows setups; please report anything odd.)
+- **Search finds what you ask for.**
+  - A file filter like `*.js` no longer brings back matches from `node_modules`, `dist` and other skipped folders.
+  - Filters with a folder (`src/*.ts`) match.
+  - One unreadable file no longer hides every other match.
+  - `(?i)` works for case-insensitive search, including without ripgrep.
+  - Globs that start inside a skipped folder (`node_modules/pkg/*.js`) list its files.
+- **Big pastes stay fast.** A paste over 12 lines shows as `[Pasted text #1: 3,012 lines]` in the prompt and is sent in full. Typing after a 3,000-line paste went from 140 ms to under 1 ms a key. Backspace removes the whole paste, and Up brings back the full text.
+- **The prompt never takes over the screen.** A long message shows the lines around your cursor, so the terminal stops redrawing everything on every key.
+- **Faster start.** Syntax highlighting, `/taste`, `/brain` and voice load the first time you use them. The main bundle is a third smaller.
+- **Derby races the newest models:** Claude Sonnet 5.5, GPT-6.1 Sol (half the price of 5.6) and Gemini 4 Argon.
+- **Derby and swarm clean up after themselves.** Closing Darce mid-race removes the racers' worktrees, a race that's stopped finishes its current step before its folder goes, and worktrees left by a crash are cleared before the next race.
+- **Clearer errors when the service is low on model credit.** Big models now fall back to a smaller output budget instead of failing, and the message says what's going on instead of linking to a billing page you can't use.
+
 ## 0.16.0
 
 Stability and speed. Every part of a session was audited and tested in a real terminal; this release fixes what turned up.
