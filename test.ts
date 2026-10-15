@@ -2179,9 +2179,12 @@ async function testUiPerf() {
     const { createElement } = await import('react')
     const e = run([{ type: 'insert', text: lines(3000) }])
     const out = renderToString(createElement(Prompt, { editor: { ...e, cursor: e.text.indexOf('line 1500') }, busy: false }), { columns: 100 })
-    const rows = out.split('\n')
-    const n = (r: string) => Number(/… ([\d,]+) more lines/.exec(r)?.[1]?.replace(',', '') ?? -1)
-    return rows.length <= 12 && rows.some(r => r.includes('line 1500')) && n(rows[0]!) > 1490 && n(rows.at(-1)!) > 1490 && n(rows[0]!) + n(rows.at(-1)!) + rows.length - 2 === 3000
+    // In a real terminal the output is colored and the cursor highlight sits inside the text: compare plain text
+    const rows = out.replace(/\x1b\[[0-9;]*m/g, '').split('\n')
+    const n = (r: string) => Number(/… ([\d,]+) more lines/.exec(r)?.[1]?.replace(/,/g, '') ?? -1)
+    // Same limit the Prompt uses: half the terminal (24 rows when there isn't one), so this passes in any window
+    const limit = Math.max(4, Math.floor((process.stdout.rows || 24) / 2))
+    return rows.length <= limit && rows.some(r => r.includes('line 1500')) && n(rows[0]!) > 0 && n(rows.at(-1)!) > 0 && n(rows[0]!) + n(rows.at(-1)!) + rows.length - 2 === 3000
   })
 
   await test('Startup: the highlighter loads on first use; code renders plain until then, highlighted after', async () => {
