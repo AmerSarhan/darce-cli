@@ -19,6 +19,35 @@ const READ_ONLY = new Set([
   'true', 'false', 'test', '[', 'sleep', 'ps', 'top', 'uptime', 'history', 'man', 'tldr', 'cal', 'bat',
 ])
 
+// Read-only commands whose operands are files: these read outside the project when given a path there
+const PATH_READERS = new Set(['ls', 'll', 'la', 'cat', 'head', 'tail', 'less', 'more', 'wc', 'grep', 'rg', 'ag', 'egrep', 'fgrep',
+  'tree', 'file', 'stat', 'du', 'diff', 'cmp', 'uniq', 'cut', 'nl', 'column', 'jq', 'yq', 'bat', 'realpath', 'readlink'])
+// The first operand is a pattern or filter, not a file (unless given with -e / -f)
+const PATTERN_FIRST = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'jq', 'yq'])
+// Options whose value is the next word, so it isn't mistaken for a file
+const VALUE_OPTS = new Set(['-e', '-f', '--regexp', '--file', '-g', '--glob', '-t', '--type', '-T', '--type-not', '-A', '-B', '-C', '-m', '--max-count', '-n', '-c', '--lines', '--bytes', '-d', '--delimiter', '-L', '-I', '--arg', '--argjson', '--slurpfile', '--rawfile'])
+
+function pathOperands(cmd: string, args: string[]): string[] {
+  const out: string[] = []
+  let patternGiven = false
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!
+    if (a === '--') { out.push(...args.slice(i + 1)); break }
+    if (VALUE_OPTS.has(a)) {
+      if (a === '-e' || a === '--regexp' || a === '-f' || a === '--file') {
+        patternGiven = true
+        // -f reads its pattern from a file: that file counts too
+        if (a === '-f' || a === '--file') out.push(args[i + 1] ?? '')
+      }
+      i++
+      continue
+    }
+    if (a.startsWith('-')) continue
+    out.push(a)
+  }
+  return PATTERN_FIRST.has(cmd) && !patternGiven ? out.slice(1) : out
+}
+
 // Commands that run another command: score the wrapped command instead
 export const WRAPPERS = new Set(['env', 'xargs', 'timeout', 'nice', 'nohup', 'command', 'builtin', 'exec', 'time', 'stdbuf', 'caffeinate', 'unbuffer'])
 // Interpreters: running a project file is "changes the project", but inline code is opaque
@@ -200,7 +229,17 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
     // Options before the subcommand can set config that runs programs (core.pager, core.sshCommand…)
     if (args.some(a => a === '-c' || a.startsWith('--config-env') || a.startsWith('--exec-path'))) return max(risk, { level: 2, reason: 'git with config overrides can run programs' })
     if (gsub === 'config') {
+      // `git config user.name` (one key, no value) and `git config get|list` only read
+      const ops: string[] = []
+      const cfg = args.slice(k + 1)
+      for (let i = 0; i < cfg.length; i++) {
+        if (['-f', '--file', '--blob', '--type', '--default', '--comment'].includes(cfg[i]!)) { i++; continue }
+        if (!cfg[i]!.startsWith('-')) ops.push(cfg[i]!)
+      }
+      const writes = cfg.some(a => /^--(unset|unset-all|add|replace-all|rename-section|remove-section|edit)$|^-e$/.test(a))
       const readOnly = args.some(a => a === '--get' || a === '--get-all' || a === '--get-regexp' || a === '--list' || a === '-l' || a === '--show-origin' && args.includes('--list'))
+        || ops[0] === 'get' || ops[0] === 'list'
+        || (!writes && ops.length === 1 && !['set', 'unset', 'edit', 'rename-section', 'remove-section'].includes(ops[0]!))
       return readOnly ? risk : max(risk, { level: 2, reason: 'changes git configuration, which can make git run programs' })
     }
     if (args.some(a => a.startsWith('-O') || a.startsWith('--open-files-in-pager') || a.startsWith('--ext-diff'))) return max(risk, { level: 2, reason: 'git option that runs another program' })
@@ -304,7 +343,11 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
     if (args.some(a => a === '-x' || a === '-X' || a.startsWith('--exec'))) return max(risk, { level: 2, reason: 'fd can run commands' })
     return risk
   }
-  if (READ_ONLY.has(cmd)) return risk
+  if (READ_ONLY.has(cmd)) {
+    // Same rule as the Read tool: reading a file outside the project (~/.ssh, ~/.aws, another repo) asks first
+    const p = PATH_READERS.has(cmd) ? pathOperands(cmd, args).find(a => (a.includes('/') || a.startsWith('~')) && outside(a, cwd)) : undefined
+    return p ? max(risk, { level: 2, reason: `reads outside the project (${p})` }) : risk
+  }
   if (NETWORK.has(cmd)) return max(risk, { level: 2, reason: `${cmd} reaches outside your machine or project${NO_UNDO}` })
   if (BUILD_TOOLS.has(cmd)) {
     const outsideTarget = (cmd === 'cp' || cmd === 'mv' || cmd === 'ln') && args.filter(a => !a.startsWith('-')).some(a => outside(a, cwd))
@@ -313,22 +356,71 @@ function classifySimple(words: string[], redirects: string[], pipedFrom: boolean
   return max(risk, { level: 2, reason: `${cmd} is not a command Darce recognises` })
 }
 
-export function bashRisk(command: string, cwd: string): Risk {
+// Commands that only print what a substitution produced: its output can't become a path, a target or a program
+const OUTPUT_ONLY = new Set(['echo', 'printf', 'test', '[', 'true', 'false', 'expr'])
+const SUB = '__darce_sub__'
+
+/**
+ * Pull out `$(…)` and backtick substitutions (not inside single quotes), replacing each with a placeholder.
+ * Returns null when the command can't be split cleanly (unbalanced or nested quoting we don't model).
+ */
+function extractSubstitutions(command: string): { outer: string; inner: string[] } | null {
+  const inner: string[] = []
+  let outer = ''
+  let i = 0
+  let quote: '"' | "'" | null = null
+  while (i < command.length) {
+    const ch = command[i]!
+    if (quote === "'") { outer += ch; if (ch === "'") quote = null; i++; continue }
+    if (ch === '\\') { outer += command.slice(i, i + 2); i += 2; continue }
+    if (ch === "'" && !quote) { quote = "'"; outer += ch; i++; continue }
+    if (ch === '"') { quote = quote === '"' ? null : '"'; outer += ch; i++; continue }
+    if (ch === '$' && command[i + 1] === '(' && command[i + 2] !== '(') {
+      let depth = 1, j = i + 2
+      while (j < command.length && depth > 0) { if (command[j] === '(') depth++; else if (command[j] === ')') depth--; j++ }
+      if (depth !== 0) return null
+      inner.push(command.slice(i + 2, j - 1)); outer += SUB; i = j; continue
+    }
+    if (ch === '`') {
+      const j = command.indexOf('`', i + 1)
+      if (j === -1) return null
+      inner.push(command.slice(i + 1, j)); outer += SUB; i = j + 1; continue
+    }
+    outer += ch; i++
+  }
+  return quote === "'" ? null : { outer, inner }
+}
+
+function scoreParsed(command: string, cwd: string): { risk: Risk; commands: ReturnType<typeof splitCommands> } | null {
   let tokens: Token[]
   try {
     tokens = parse(command, (name: string) => `$${name}`) as Token[]
   } catch {
-    return { level: 2, reason: 'could not parse the command' }
+    return null
   }
+  const commands = splitCommands(tokens)
+  return { risk: commands.reduce<Risk>((r, c) => max(r, classifySimple(c.words, c.redirects, c.pipedFrom, cwd)), { level: 0, reason: 'read-only' }), commands }
+}
+
+export function bashRisk(command: string, cwd: string, depth = 0): Risk {
   if (/\$\(|`/.test(command)) {
-    // Command substitution: score the outer command but never below "needs a look"
-    const base = splitCommands(tokens).reduce<Risk>((r, c) => max(r, classifySimple(c.words, c.redirects, c.pipedFrom, cwd)), { level: 0, reason: 'read-only' })
-    return max(base, { level: 2, reason: 'uses command substitution' })
+    const subs = depth < 3 ? extractSubstitutions(command) : null
+    const outer = subs && scoreParsed(subs.outer, cwd)
+    if (subs && outer) {
+      const inner = subs.inner.reduce<Risk>((r, c) => max(r, bashRisk(c, cwd, depth + 1)), { level: 0, reason: 'read-only' })
+      // Read-only commands whose output is only printed (echo "files: $(git ls-files | wc -l)") are as safe as the parts.
+      // Anywhere else the output could become a path, a target or a program, so it still needs a look.
+      const printedOnly = outer.commands.every(c => !c.words.some(w => w.includes(SUB)) || OUTPUT_ONLY.has(c.words[0] ?? ''))
+        && !outer.commands.some(c => (c.words[0] ?? '').includes(SUB))
+      if (printedOnly && inner.level === 0) return max(outer.risk, inner)
+      return max(max(outer.risk, inner), { level: 2, reason: 'uses command substitution' })
+    }
+    const base = scoreParsed(command, cwd)
+    if (!base) return { level: 2, reason: 'could not parse the command' }
+    return max(base.risk, { level: 2, reason: 'uses command substitution' })
   }
-  return splitCommands(tokens).reduce<Risk>(
-    (r, c) => max(r, classifySimple(c.words, c.redirects, c.pipedFrom, cwd)),
-    { level: 0, reason: 'read-only' },
-  )
+  const scored = scoreParsed(command, cwd)
+  return scored ? scored.risk : { level: 2, reason: 'could not parse the command' }
 }
 
 export function toolRisk(name: string, input: Record<string, unknown>, cwd: string): Risk {

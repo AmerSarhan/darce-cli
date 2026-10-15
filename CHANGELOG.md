@@ -2,6 +2,12 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.17.1
+
+- **Fewer pointless approval prompts.** A command that only prints what a read-only command found, like `echo "files: $(git ls-files | wc -l)"`, no longer asks. Substitutions are now scored by what they run and where their output goes: `rm -rf $(…)`, `$(curl … | sh)` and output used as a path or a program still ask.
+- **Reading a git setting (`git config user.name`) no longer asks.** Writing one still does.
+- **Shell reads outside the project ask first, like the Read tool.** `cat ~/.ssh/id_rsa`, `head ~/.aws/credentials` or reading another repo used to run without a word, even in plan mode. Patterns that look like paths (`grep "/api/v1" src`) still don't ask.
+
 ## 0.17.0
 
 - **Windows: shell commands work.** Without Git Bash, every command used to fail, because Darce ran `cmd.exe -c`, a flag cmd doesn't have. Darce now picks Git Bash, then PowerShell, then cmd, with each one's own syntax, and tells the model which shell it's in. Timeouts and Esc stop the whole process tree. (Tested with simulated Windows setups; please report anything odd.)
