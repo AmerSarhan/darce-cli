@@ -22,7 +22,6 @@ Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest f
 - **Faster start.** Syntax highlighting, `/taste`, `/brain` and voice load the first time you use them. The main bundle is a third smaller.
 - **Derby races the newest models:** Claude Sonnet 5.5, GPT-6.1 Sol (half the price of 5.6) and Gemini 4 Argon.
 - **Derby and swarm clean up after themselves.** Closing Darce mid-race removes the racers' worktrees, a race that's stopped finishes its current step before its folder goes, and worktrees left by a crash are cleared before the next race.
-- **Clearer errors when the service is low on model credit.** Big models now fall back to a smaller output budget instead of failing, and the message says what's going on instead of linking to a billing page you can't use.
 
 ## 0.16.0
 
