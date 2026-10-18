@@ -122,3 +122,32 @@ export function keepRecent(messages: Message[], keep: number): Message[] {
   if (messages.length <= keep) return messages
   return messages.slice(safeStart(messages, messages.length - keep))
 }
+
+const usesTool = (m: Message, ids: (id: string) => boolean) =>
+  m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use' && ids(b.id))
+
+/**
+ * Where to cut the conversation when the files are rewound to before step `toolUseId` (-1: not in it).
+ * Normally right before the reply that took that step. When no change from the same turn is left
+ * (`kept` holds the steps that stay), the user's request goes too: left unanswered at the end, it
+ * reads as still to do, and the model does the rewound work again on the next message.
+ */
+export function rewindCut(messages: Message[], toolUseId: string, kept: Set<string>): number {
+  const at = messages.findIndex(m => usesTool(m, id => id === toolUseId))
+  if (at < 0) return -1
+  let ask = at - 1
+  while (ask >= 0 && !(messages[ask]!.role === 'user' && !isToolResult(messages[ask]!))) ask--
+  if (ask < 0) return at
+  return messages.slice(ask + 1, at).some(m => usesTool(m, id => kept.has(id))) ? at : ask
+}
+
+export const STOPPED_NOTE = '(Stopped by the user before this reply finished.)'
+
+/**
+ * After the user stops a turn, close it with a short reply. Otherwise the stopped request sits
+ * unanswered next to the user's new message, and the model often answers the old one instead.
+ */
+export function markStopped(messages: Message[]): Message[] {
+  const last = messages.at(-1)
+  return last?.role === 'user' ? [...messages, { role: 'assistant', content: STOPPED_NOTE }] : messages
+}

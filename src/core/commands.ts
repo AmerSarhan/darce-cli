@@ -5,6 +5,8 @@ export type CommandContext = {
   setModel: (model: string) => void
   currentModel: string
   clearMessages: () => void
+  /** Start a new saved session, so the cleared conversation stays resumable instead of being overwritten */
+  newSession?: () => void
   cwd: string
 }
 
@@ -188,6 +190,7 @@ const COMMANDS: SlashCommand[] = [
     description: 'Clear conversation history',
     execute: (_args, context) => {
       context.clearMessages()
+      context.newSession?.()
       return null // REPL handles clearing display
     },
   },
@@ -200,10 +203,10 @@ const COMMANDS: SlashCommand[] = [
   },
   {
     name: 'compact',
-    description: 'Compact conversation (keep last 4 messages)',
+    description: 'Shrink the conversation, keeping your first request and the recent context',
     execute: (_args, context) => {
       context.clearMessages()
-      return 'Conversation compacted. Kept last 4 messages.'
+      return null // REPL reports what was kept
     },
   },
   {
@@ -216,8 +219,9 @@ const COMMANDS: SlashCommand[] = [
   },
 ]
 
+/** A slash command, not a message that starts with a path like /usr/bin/env or a dragged-in file. */
 export function isSlashCommand(input: string): boolean {
-  return input.startsWith('/')
+  return /^\/[^\s/]*(\s|$)/.test(input)
 }
 
 export function executeCommand(input: string, context: CommandContext): string | null {

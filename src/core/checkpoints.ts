@@ -425,7 +425,7 @@ export class Checkpoints {
       if (!this.root || !cp.commit) return cp.blind ? null : extra
       const next = this.stack[i + 1]?.commit
       const end = cp.after ?? (next ? `${next}^{tree}` : (await this.writeTree()).tree)
-      return [...(await this.diffTrees(`${cp.commit}^{tree}`, end)), ...extra.filter(d => d.added || d.removed || d.created)]
+      return [...(await this.diffTrees(`${cp.commit}^{tree}`, end)), ...extra.filter(d => d.added || d.removed || d.created || d.binary)]
     })
   }
 

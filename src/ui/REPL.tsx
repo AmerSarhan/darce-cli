@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useReducer, useEffect, useMemo } from 'react'
 import { Box, Static, Text, useInput, usePaste, useApp, useStdout, useWindowSize, type Key } from 'ink'
 import { homedir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 import { Prompt } from './Prompt.js'
 import { StatusBar } from './StatusBar.js'
 import { ModelPicker } from './ModelPicker.js'
@@ -16,9 +17,9 @@ import { intentFor } from './input/keys.js'
 import { TranscriptItemView, newId, toolSummary, type TranscriptItem } from './transcript.js'
 import { query } from '../core/query.js'
 import { buildSystemPrompt } from '../core/context.js'
-import { compactMessages } from '../core/conversation.js'
+import { compactMessages, rewindCut, markStopped } from '../core/conversation.js'
 import { selectModel } from '../providers/router.js'
-import { executeCommand } from '../core/commands.js'
+import { executeCommand, isSlashCommand } from '../core/commands.js'
 import { saveSession } from '../state/sessions.js'
 import { loadHistory, saveHistory } from '../state/history.js'
 import { estimateMessagesTokens } from '../utils/tokens.js'
@@ -51,7 +52,7 @@ import { browserLogin } from '../auth/browserLogin.js'
 import { discoverSkills } from '../core/skills.js'
 import { resetContext } from '../core/context.js'
 import { completionContext, rank } from './input/complete.js'
-import { projectFiles } from './input/files.js'
+import { projectFiles, mentionedFiles } from './input/files.js'
 import { CompletionMenu, type MenuItem } from './CompletionMenu.js'
 import { listCommands } from '../core/commands.js'
 import { readFileSync, existsSync, statSync } from 'node:fs'
@@ -199,7 +200,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   busyRef.current = busy
   const [activity, setActivity] = useState<Activity | null>(null)
   const [tail, setTail] = useState('')
-  const [queue, setQueue] = useState<{ text: string; shown?: string }[]>([])
+  const [queue, setQueue] = useState<{ text: string; shown?: string; images?: ImageContent[] }[]>([])
   const [showPicker, setShowPicker] = useState(false)
   const [showSessions, setShowSessions] = useState(false)
   const [hint, setHint] = useState<string | undefined>()
@@ -345,12 +346,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const attachMentions = useCallback((text: string): string => {
     let budget = 60_000
     const parts: string[] = []
-    for (const m of text.matchAll(/(?:^|\s)@([^\s@]+)/g)) {
-      const rel = m[1]!
-      const abs = resolvePath(state.cwd, rel)
+    for (const { rel, abs } of mentionedFiles(text, state.cwd)) {
+      // Images go to the model as images (mentionImages); other binary files would arrive as garbage text
+      if (budget <= 0 || imagePathFrom(abs, state.cwd)) continue
       try {
-        if (!existsSync(abs) || !statSync(abs).isFile() || budget <= 0) continue
-        let body = readFileSync(abs, 'utf-8')
+        const raw = readFileSync(abs)
+        if (raw.subarray(0, 8192).includes(0)) { parts.push(`<file path="${rel}">\n(binary file, ${raw.length} bytes, not shown)\n</file>`); continue }
+        let body = raw.toString('utf-8')
         if (body.length > Math.min(30_000, budget)) body = body.slice(0, Math.min(30_000, budget)) + '\n…(truncated)'
         budget -= body.length
         readFilesRef.current.add(abs)
@@ -358,6 +360,18 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       } catch {}
     }
     return parts.length ? `\n\nFiles the user attached:\n${parts.join('\n')}` : ''
+  }, [state.cwd])
+
+  /** Images named with @path, sent as images like dragged-in ones. */
+  const mentionImages = useCallback((text: string): ImageContent[] => {
+    const out: ImageContent[] = []
+    for (const { abs } of mentionedFiles(text, state.cwd)) {
+      if (!imagePathFrom(abs, state.cwd)) continue
+      const a = attachmentFromFile(abs, 0)
+      if ('error' in a) { flashHint(a.error, 3500); continue }
+      out.push({ type: 'image', mediaType: a.mediaType, data: toBase64(a), name: a.name })
+    }
+    return out
   }, [state.cwd])
 
   const addImage = useCallback((a: Attachment) => {
@@ -670,6 +684,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
 
       messagesRef.current = result.value.messages
       if (result.value.reason === 'aborted') {
+        messagesRef.current = markStopped(messagesRef.current)
         flush(true)
         commit({ kind: 'system', id: newId(), text: 'Stopped. Send a message to continue.' })
       } else if (result.value.reason === 'max_turns') {
@@ -692,7 +707,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         // In a git repo the checkpoints know everything this turn changed, shell commands included
         const actual = await checkpointsRef.current?.diffSince(checkpointsAtStart)
         receipt.files = actual
-          ? actual.filter(d => d.added || d.removed || d.created).map(d => ({ path: d.path, added: d.added, removed: d.removed, created: !!d.created }))
+          ? actual.filter(d => d.added || d.removed || d.created || d.binary).map(d => ({ path: d.path, added: d.added, removed: d.removed, created: !!d.created }))
           : [...fileStats.values()]
         receipt.tokens = getTotalTokens() - tokensBefore
         receipt.cost = getTotalCost() - costBefore
@@ -740,14 +755,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const cps = checkpointsRef.current!
     const cp = cps.list()[index]
     if (!cp) return
+    const kept = new Set(cps.list().slice(0, index).flatMap(c => c.toolUseId ? [c.toolUseId] : []))
     const r = await cps.rewindTo(index)
     setTape(null)
     if (!r.ok) { commit({ kind: 'error', id: newId(), text: r.reason }); return }
+    setSuggestion(null)
     // Cut the conversation back to before the message that made this step
-    let cut = -1
-    if (cp.toolUseId) {
-      cut = messagesRef.current.findIndex(m => Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use' && b.id === cp.toolUseId))
-    }
+    const cut = cp.toolUseId ? rewindCut(messagesRef.current, cp.toolUseId, kept) : -1
     if (cut >= 0) messagesRef.current = messagesRef.current.slice(0, cut)
     setContextTokens(estimateMessagesTokens(messagesRef.current))
     commit({ kind: 'system', id: newId(), text: `Rewound to before: ${cp.label}\n${undoLines(r, cps.gitRoot ?? state.cwd, !!cps.gitRoot)}${cut >= 0 ? '\nThe conversation was rewound to the same point.' : ''}` })
@@ -920,6 +934,11 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           readFilesRef.current.clear()
           setContextTokens(0)
         }
+      },
+      newSession: () => {
+        const id = randomUUID()
+        setState(prev => ({ ...prev, sessionId: id }))
+        provider.setSession?.(id)
       },
       cwd: state.cwd,
     }
@@ -1216,8 +1235,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (busy || queue.length === 0) return
     const [next, ...rest] = queue
     setQueue(rest)
-    void runQuery(next!.text, '', [], next!.shown)
-  }, [busy, queue, runQuery])
+    void runQuery(next!.text, attachMentions(next!.text), next!.images, next!.shown)
+  }, [busy, queue, runQuery, attachMentions])
 
   // Initial prompt from the command line
   const startedInitial = useRef(false)
@@ -1415,7 +1434,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         const next = editorReducer(editor, { type: 'commit', entry: text })
         dispatch({ type: 'commit', entry: text })
         saveHistory(next.history)
-        if (text.startsWith('/')) {
+        if (isSlashCommand(text)) {
           if (busy && !/^\/(help|cost)\b/.test(text)) {
             flashHint('Wait for Darce to finish, or press Esc to stop it')
             return
@@ -1423,13 +1442,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           handleCommand(text)
           return
         }
+        // Images are taken now, so a queued message keeps the ones it was sent with
+        const used = attachments.filter(a => typed.includes(`[Image #${a.n}]`))
+        const images: ImageContent[] = [...used.map((a): ImageContent => ({ type: 'image', mediaType: a.mediaType, data: toBase64(a), name: a.name })), ...mentionImages(text)]
+        setAttachments([])
         if (busy) {
-          setQueue(q => [...q, { text, shown }])
+          setQueue(q => [...q, { text, shown, images }])
           return
         }
-        const used = attachments.filter(a => typed.includes(`[Image #${a.n}]`))
-        const images: ImageContent[] = used.map(a => ({ type: 'image', mediaType: a.mediaType, data: toBase64(a), name: a.name }))
-        setAttachments([])
         void runQuery(text, attachMentions(text), images, shown)
         return
       }

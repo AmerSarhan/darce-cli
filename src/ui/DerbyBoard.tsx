@@ -10,6 +10,9 @@ const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '
 const ANSWER_LINES = 18
 const answerLines = (s: string) => s.trim().split('\n').length
 
+/** The last two lines of a racer's reply, for the board. Code fence markers are not text. */
+export const answerSummary = (s: string) => s.trim().split('\n').filter(l => l.trim() && !/^\s*(```|~~~)/.test(l)).slice(-2).join(' ').slice(0, 220)
+
 function secs(ms: number) {
   return `${Math.round(ms / 1000)}s`
 }
@@ -62,7 +65,7 @@ export function DerbyBoard({ task, racers, selected, finished, variant = 'derby'
         </Box>
       ) : pick && pick.diffs.length && (pick.status === 'done' || finished) ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text color={t.muted}>{swarm ? pick.title : pick.model}{pick.answer ? ': ' : ''}<Text color={t.text}>{pick.answer.trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 220)}</Text></Text>
+          <Text color={t.muted}>{swarm ? pick.title : pick.model}{pick.answer ? ': ' : ''}<Text color={t.text}>{answerSummary(pick.answer)}</Text></Text>
           {pick.diffs.slice(0, 2).map(d => (
             <Box key={d.path} flexDirection="column" marginTop={1}>
               <Text>{d.path}</Text>

@@ -1,3 +1,5 @@
+import { existsSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { gitFiles, walk } from '../../utils/walk.js'
 
 // Project file list for @mentions, loaded once in the background. Bounded, so starting Darce in a
@@ -18,4 +20,20 @@ export function projectFiles(cwd: string): string[] {
       .finally(() => { loading = null })
   }
   return []
+}
+
+/** Files named with @path in a message: existing files only, once each. Trailing punctuation ("@src/a.ts,") is not part of the path. */
+export function mentionedFiles(text: string, cwd: string): Array<{ rel: string; abs: string }> {
+  const out: Array<{ rel: string; abs: string }> = []
+  for (const m of text.matchAll(/(?:^|\s)@([^\s@]+)/g)) {
+    for (const rel of new Set([m[1]!, m[1]!.replace(/[.,;:!?)\]}'"`]+$/, '')])) {
+      const abs = resolve(cwd, rel)
+      try {
+        if (!rel || !existsSync(abs) || !statSync(abs).isFile()) continue
+      } catch { continue }
+      if (!out.some(f => f.abs === abs)) out.push({ rel, abs })
+      break
+    }
+  }
+  return out
 }

@@ -883,6 +883,7 @@ async function runTests() {
   await testDerbyCleanup()
   await testRiskReads()
   await testUiPerf()
+  await testSessionInputFixes()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -2230,4 +2231,71 @@ async function testRiskReads() {
   await test('Risk: reading a git setting is read-only; writing one still asks', () =>
     ['git config user.name', 'git config get user.email', 'git config list', 'git config --global user.name'].every(c => level(c) === 0)
     && ['git config user.name x', 'git config core.pager "sh -c x"', 'git config --unset user.name', 'git config set user.name x', 'git config -e'].every(c => level(c) === 2))
+}
+
+// ============================================================
+// Sessions, rewind and input: /clear, rewind cut, stopped turns, @mentions, binary diffs
+// ============================================================
+
+async function testSessionInputFixes() {
+  const { rewindCut, markStopped, STOPPED_NOTE } = await import('./src/core/conversation.js')
+  const { isSlashCommand } = await import('./src/core/commands.js')
+  const { mentionedFiles } = await import('./src/ui/input/files.js')
+  const { echoesExample } = await import('./src/core/suggest.js')
+  const { answerSummary } = await import('./src/ui/DerbyBoard.js')
+
+  await test('Sessions: /clear starts a new session, so the cleared conversation stays resumable; /compact does not', () => {
+    let fresh = 0, cleared = 0
+    const ctx = { setModel: () => {}, currentModel: 'm', clearMessages: () => { cleared++ }, newSession: () => { fresh++ }, cwd: process.cwd() }
+    executeCommand('/clear', ctx)
+    executeCommand('/compact', ctx)
+    return fresh === 1 && cleared === 2
+  })
+
+  await test('Input: a message starting with a path is sent, not run as an unknown command', () =>
+    !isSlashCommand('/usr/bin/env is where?') && !isSlashCommand('/Users/me/app/log.txt why does this fail')
+    && isSlashCommand('/help') && isSlashCommand('/model qwen') && isSlashCommand('/frobnicate now') && isSlashCommand('/'))
+
+  const use = (id: string): Message => ({ role: 'assistant', content: [{ type: 'tool_use', id, name: 'Edit', input: {} }] })
+  const res = (id: string): Message => ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] })
+  const history: Message[] = [
+    { role: 'user', content: 'append y' }, use('t1'), res('t1'), { role: 'assistant', content: 'done' },
+    { role: 'user', content: 'append z' }, use('r0'), res('r0'), use('t2'), res('t2'), use('t3'), res('t3'), { role: 'assistant', content: 'done' },
+  ]
+  await test('Rewind: rewinding the first change of a turn drops its request too, so it is not redone', () =>
+    rewindCut(history, 't2', new Set(['t1'])) === 4 && rewindCut(history, 't1', new Set()) === 0)
+  await test('Rewind: rewinding a later change of a turn keeps the request and the changes before it', () =>
+    rewindCut(history, 't3', new Set(['t1', 't2'])) === 9 && rewindCut(history, 'nope', new Set()) === -1)
+
+  await test('Stop: a stopped turn gets a closing reply, so the next message is answered instead of the old one', () => {
+    const asked: Message[] = [{ role: 'user', content: 'essay about rivers' }]
+    const answered: Message[] = [...asked, { role: 'assistant', content: 'ok' }]
+    const out = markStopped(asked)
+    return out.length === 2 && out[1]!.role === 'assistant' && out[1]!.content === STOPPED_NOTE && markStopped(answered) === answered
+  })
+
+  await test('Input: @mentions find files with trailing punctuation, once each, and skip missing ones', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'darce-mention-'))
+    writeFileSync(join(dir, 'a.ts'), 'x')
+    writeFileSync(join(dir, 'red.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]))
+    const found = mentionedFiles('look at @a.ts, then @red.png? and @a.ts and @missing.ts. me@host', dir)
+    return found.map(f => f.rel).join(',') === 'a.ts,red.png' && found[1]!.abs === join(dir, 'red.png')
+  })
+
+  await test('Diff: binary files are marked binary, with no lines to print', () => {
+    const png = '\x89PNG\r\n\x1a\n\0\0\0\rIHDR'
+    const created = fileDiff('red.png', null, png)
+    const changed = fileDiff('red.png', png, png + '\0x')
+    return created.binary === true && created.created && created.hunks.length === 0 && created.added === 0
+      && changed.binary === true && !changed.created && !fileDiff('a.ts', 'a\n', 'b\n').binary
+  })
+
+  await test('Suggest: a prompt example repeated word for word is dropped unless the session is about it', () =>
+    echoesExample('now add the same check to signup', 'User: add mul to math_utils.py')
+    && !echoesExample('now add the same check to signup', 'User: add a check to the signup form')
+    && !echoesExample('run the tests', 'User: add mul'))
+
+  await test('Derby: the board summary skips code fence lines', () =>
+    answerSummary('Here it is:\n```python\nx = 1\n```\nI did not run it.') === 'x = 1 I did not run it.'
+    && answerSummary('one\n\ntwo\nthree') === 'two three')
 }

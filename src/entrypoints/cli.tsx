@@ -79,6 +79,11 @@ if (args[0] === 'login') {
 
   const modeIndex = args.indexOf('--mode')
   if (modeIndex !== -1 && args[modeIndex + 1]) {
+    // A typo here would silently decline every step in -p, or quietly fall back to auto
+    if (!['auto', 'ask', 'plan', 'full'].includes(args[modeIndex + 1]!)) {
+      console.error(`Unknown mode "${args[modeIndex + 1]}". Use auto, ask, plan or full.`)
+      process.exit(2)
+    }
     process.env.DARCE_MODE = args[modeIndex + 1]
     args.splice(modeIndex, 2)
   }

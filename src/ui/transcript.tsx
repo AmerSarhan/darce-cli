@@ -67,6 +67,7 @@ function resultHeadline(item: Extract<TranscriptItem, { kind: 'tool' }>): string
   if (item.isError) return clip(lines[0]?.replace(/^Error:\s*/i, '') ?? 'failed', 200)
   if (item.display?.kind === 'diff') {
     const d = item.display
+    if (d.binary) return d.created ? 'created, binary' : 'binary file changed'
     return d.created ? `created, ${d.added} line${d.added === 1 ? '' : 's'}` : `+${d.added} −${d.removed}`
   }
   switch (item.name) {
@@ -174,7 +175,7 @@ export function TranscriptItemView({ item }: { item: TranscriptItem }) {
       return (
         <Box flexDirection="column" marginLeft={1} marginBottom={1}>
           {item.display?.kind === 'diff'
-            ? <Text><Text bold>{item.summary}</Text><Text color={t.faint}>  {item.display.created ? `new file, ${item.display.added} line${item.display.added === 1 ? '' : 's'}` : `+${item.display.added} −${item.display.removed}`}</Text></Text>
+            ? <Text><Text bold>{item.summary}</Text><Text color={t.faint}>  {item.display.binary ? (item.display.created ? 'new binary file' : 'binary file changed') : item.display.created ? `new file, ${item.display.added} line${item.display.added === 1 ? '' : 's'}` : `+${item.display.added} −${item.display.removed}`}</Text></Text>
             : <Text color={t.muted}>Full output of {item.name} {item.summary}</Text>}
           {item.display?.kind === 'diff'
             ? <DiffView diff={item.display} maxLines={EXPANDED_MAX_DIFF} />

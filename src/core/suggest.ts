@@ -55,5 +55,14 @@ export async function predictNext(provider: Provider, model: string, messages: M
   }
   const guess = text.trim().split('\n')[0]!.replace(/^["'`>\s-]+|["'`.\s]+$/g, '')
   if (!guess || /^none$/i.test(guess) || guess.length > 100) return null
-  return guess
+  return echoesExample(guess, recap(messages)) ? null : guess
+}
+
+// Examples in the prompt that only make sense in some projects, with the word that grounds them
+const SPECIFIC_EXAMPLES: Record<string, string> = { 'now add the same check to signup': 'signup', 'deploy it to staging': 'staging' }
+
+/** Small models sometimes repeat a prompt example word for word, in a session that never mentions it. */
+export function echoesExample(guess: string, session: string): boolean {
+  const word = SPECIFIC_EXAMPLES[guess.trim().toLowerCase()]
+  return !!word && !session.toLowerCase().includes(word)
 }

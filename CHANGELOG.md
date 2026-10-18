@@ -2,6 +2,17 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.17.2
+
+- **`/clear` no longer erases the conversation you cleared.** It starts a new saved session, so `/resume` still lists the old one. Before, the next message overwrote it.
+- **`/rewind` doesn't redo what you rewound.** Rewinding the first change of a request now removes that request from the conversation too. Before, the model saw it unanswered and made the change again on your next message.
+- **After Esc, your next message gets the answer.** A stopped reply is closed off, so the model no longer goes back to the request you stopped.
+- **`@image.png` attaches the image.** It used to send the file's bytes as text. Other binary files are named but not pasted, `@file.ts,` with trailing punctuation works, and a message you queue while Darce works keeps its `@` files and images.
+- **A message that starts with a path** (`/usr/bin/env is where?`, a dragged-in file) is sent to the model instead of failing as an unknown command.
+- **`/diff`, receipts and the rewind tape show "binary file"** for images and other binaries instead of printing their bytes.
+- `--mode` with an unknown value says so and exits, instead of quietly declining every step in `-p`. `/compact` describes what it keeps correctly.
+- Smaller: the derby and swarm boards no longer show stray ``` in a model's summary, and next-prompt suggestions no longer repeat an example from Darce's own prompt.
+
 ## 0.17.1
 
 - **Fewer pointless approval prompts.** A command that only prints what a read-only command found, like `echo "files: $(git ls-files | wc -l)"`, no longer asks. Substitutions are now scored by what they run and where their output goes: `rm -rf $(…)`, `$(curl … | sh)` and output used as a path or a program still ask.
