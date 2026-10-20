@@ -79,7 +79,11 @@ function partialProvider(text: string): Provider {
 export async function testProvider0180(test: Test) {
   const server = http.createServer((req, res) => {
     req.resume()
-    void scenarios[req.url!.split('/')[1]!]?.(res)
+    // Own keys only: a path like /constructor must not reach an inherited method
+    const name = (req.url ?? '').split('/')[1] ?? ''
+    const handler = Object.hasOwn(scenarios, name) ? scenarios[name] : undefined
+    if (typeof handler === 'function') void handler(res)
+    else { res.writeHead(404); res.end() }
   })
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
   const port = (server.address() as { port: number }).port
