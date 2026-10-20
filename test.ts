@@ -8,6 +8,9 @@
  */
 
 import './test-home.js'
+import { testTools0180 } from './test-tools-0180.js'
+import { testProvider0180 } from './test-provider-0180.js'
+import { testState0180 } from './test-state-0180.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync, unlinkSync, existsSync, mkdirSync, writeFileSync, mkdtempSync, utimesSync } from 'node:fs'
@@ -884,6 +887,10 @@ async function runTests() {
   await testRiskReads()
   await testUiPerf()
   await testSessionInputFixes()
+  await testRelease0180()
+  await testTools0180(test)
+  await testProvider0180(test)
+  await testState0180(test)
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -2298,4 +2305,94 @@ async function testSessionInputFixes() {
   await test('Derby: the board summary skips code fence lines', () =>
     answerSummary('Here it is:\n```python\nx = 1\n```\nI did not run it.') === 'x = 1 I did not run it.'
     && answerSummary('one\n\ntwo\nthree') === 'two three')
+}
+
+async function testRelease0180() {
+  const { parseArgs } = await import('./src/entrypoints/args.js')
+  const { saveSession, loadSession, sessionMtime } = await import('./src/state/sessions.js')
+  const { readPipedStdin, STDIN_LIMIT } = await import('./src/utils/stdin.js')
+
+  await test('Args: --flag=value works, and a flag with no value is an error, not part of the prompt', () => {
+    const a = parseArgs(['-p', '--mode=plan', 'just look'])
+    const b = parseArgs(['-p', 'x', '--mode'])
+    const c = parseArgs(['--model', '-p', 'hi'])
+    return !('error' in a) && a.mode === 'plan' && a.print && a.prompt === 'just look' && 'error' in b && 'error' in c
+  })
+
+  await test('Args: words that look like flags inside the prompt stay in it; unknown leading options are refused', () => {
+    const a = parseArgs(['-p', 'what', 'does', 'ls', '-h', 'do'])
+    const b = parseArgs(['-p', 'explain', 'grep', '-r'])
+    const c = parseArgs(['fix it', '--model', 'x/y'])
+    const d = parseArgs(['-p', '--verbose', 'hi'])
+    const e = parseArgs(['-p', '--', '-r', 'is a flag?'])
+    return !('error' in a) && a.prompt === 'what does ls -h do' && !a.help
+      && !('error' in b) && b.prompt === 'explain grep -r' && !b.resume
+      && !('error' in c) && c.model === 'x/y' && c.prompt === 'fix it'
+      && 'error' in d && !('error' in e) && e.prompt === '-r is a flag?'
+      && 'error' in parseArgs(['-p', '-r', 'hi']) && 'error' in parseArgs(['--mode', 'yolo'])
+  })
+
+  await test('Sessions: a second window saving the same conversation forks instead of overwriting', () => {
+    const id = 'fork-' + Date.now()
+    const one: Message[] = [{ role: 'user', content: 'from window A' }]
+    const a = saveSession(id, one, '/p')
+    const b = saveSession(id, [{ role: 'user', content: 'from window B' }], '/p', a.mtimeMs - 1000) // B loaded it before A saved
+    const c = saveSession(b.sessionId, [{ role: 'user', content: 'B again' }], '/p', b.mtimeMs)
+    return a.sessionId === id && b.sessionId !== id && c.sessionId === b.sessionId
+      && JSON.stringify(loadSession(id)!.messages) === JSON.stringify(one) && sessionMtime(id) === a.mtimeMs
+  })
+
+  await test('Sessions: only the last few messages keep their images when saved', () => {
+    const img = { type: 'image' as const, mediaType: 'image/png', data: 'x'.repeat(1000), name: 'shot.png' }
+    const msgs: Message[] = Array.from({ length: 10 }, (_, i) => ({ role: 'user' as const, content: [{ type: 'text' as const, text: `m${i}` }, img] }))
+    const id = 'img-' + Date.now()
+    saveSession(id, msgs, '/p')
+    const back = loadSession(id)!.messages
+    const imgs = back.map(m => Array.isArray(m.content) && m.content.some(b => b.type === 'image'))
+    return imgs.filter(Boolean).length === 6 && !imgs[0] && imgs[9]! && JSON.stringify(back[0]).includes('shot.png not kept')
+  })
+
+  await test('Sessions: a save that cannot be written throws, so the app can report it', async () => {
+    const { chmodSync } = await import('node:fs')
+    const dir = join(process.env.HOME!, '.darce', 'sessions')
+    saveSession('perm-' + Date.now(), [{ role: 'user', content: 'x' }], '/p')
+    chmodSync(dir, 0o500)
+    try { saveSession('perm2-' + Date.now(), [{ role: 'user', content: 'x' }], '/p'); return false } catch { return true } finally { chmodSync(dir, 0o700) }
+  })
+
+  const { PassThrough } = await import('node:stream')
+  const { openSync, closeSync } = await import('node:fs')
+
+  await test('Print mode: a pipe is read to the end and trailing whitespace dropped', async () => {
+    const file = tmpFile('stdin.txt'); writeFileSync(file, '')
+    const fd = openSync(file, 'r')
+    const s = new PassThrough()
+    const p = readPipedStdin(s, fd)
+    s.write('line one\n'); setTimeout(() => { s.write('line two\n\n'); s.end() }, 50)
+    const r = await p
+    closeSync(fd)
+    return r?.text === 'line one\nline two' && !r.truncated
+  })
+
+  await test('Print mode: stdin left open with nothing in it does not hang, one that goes quiet counts as done', async () => {
+    const fd = openSync(TMP_DIR, 'r') // neither a pipe nor a file, like a socket a parent left open
+    const quiet = await readPipedStdin(new PassThrough(), fd, 80)
+    const s = new PassThrough()
+    const p = readPipedStdin(s, fd, 80)
+    s.write('hi')
+    const r = await p
+    closeSync(fd)
+    return quiet === null && r?.text === 'hi'
+  })
+
+  await test('Print mode: huge piped input is cut at the limit and says so', async () => {
+    const file = tmpFile('stdin-big.txt'); writeFileSync(file, '')
+    const fd = openSync(file, 'r')
+    const s = new PassThrough()
+    const p = readPipedStdin(s, fd)
+    s.write('x'.repeat(STDIN_LIMIT + 10))
+    const r = await p
+    closeSync(fd)
+    return r?.text.length === STDIN_LIMIT && r.truncated
+  })
 }

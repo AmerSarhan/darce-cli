@@ -17,7 +17,7 @@ function diffText(d: FileDiff): string {
 export type Verdict = { ok: true } | { ok: false; issue: string }
 
 /** Ask a second model whether an edit introduces a bug. Returns quickly; never throws. */
-export async function reviewEdit(provider: Provider, model: string, task: string, diff: FileDiff, signal?: AbortSignal): Promise<Verdict | null> {
+export async function reviewEdit(provider: Provider, model: string, task: string, diff: FileDiff, signal?: AbortSignal, timeoutMs = 20_000): Promise<Verdict | null> {
   const prompt = [
     `A coding agent made this change while working on: "${task.slice(0, 500)}"`,
     `File: ${diff.path}`,
@@ -29,20 +29,25 @@ export async function reviewEdit(provider: Provider, model: string, task: string
   ].join('\n')
 
   let text = ''
+  let complete = false
+  // Keep-alives reset the stall watchdog, so without a deadline a late verdict lands on an unrelated later message
+  const timeout = AbortSignal.timeout(timeoutMs)
   try {
     for await (const e of provider.stream(
       [{ role: 'system', content: 'You are a terse, precise code reviewer.' }, { role: 'user', content: prompt }],
       model,
       [],
-      signal,
+      signal ? AbortSignal.any([signal, timeout]) : timeout,
     )) {
       if (e.type === 'text_delta') text += e.text
-      if (e.type === 'message_complete') addUsage(model, e.usage)
+      if (e.type === 'message_complete') { complete = true; addUsage(model, e.usage) }
       if (e.type === 'error') return null
     }
   } catch {
     return null
   }
+  // A cut-off verdict ("OK" from "OK, but…") is worse than none
+  if (!complete) return null
   const answer = text.trim().replace(/^["'`]+|["'`]+$/g, '')
   if (!answer) return null
   return /^ok\b[.!]?$/i.test(answer) ? { ok: true } : { ok: false, issue: answer.split('\n')[0]!.slice(0, 200) }

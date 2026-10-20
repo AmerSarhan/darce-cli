@@ -85,6 +85,15 @@ function toOpenRouterMessages(messages: Message[], vision = true): Array<Record<
 
 const RETRY_STATUS = new Set([429, 500, 502, 503, 504])
 
+/** A proxy's HTML error page would put kilobytes of markup in the transcript: keep its title at most. */
+export function errorBodyMessage(body: string): string {
+  if (/^\s*<(!doctype|html)|<\/(html|body)>/i.test(body)) return /<title[^>]*>([^<]*)<\/title>/i.exec(body)?.[1]?.replace(/\s+/g, ' ').trim().slice(0, 120) ?? ''
+  let message = body
+  try { const j = JSON.parse(body); message = j.message || j.error?.message || (typeof j.error === 'string' ? j.error : '') || body } catch {}
+  message = String(message).trim()
+  return message.length > 300 ? `${message.slice(0, 300)}…` : message
+}
+
 /** Resolves false as soon as `signal` aborts, so a backoff never delays a cancel. */
 function sleep(ms: number, signal?: AbortSignal): Promise<boolean> {
   return new Promise(resolve => {
@@ -203,10 +212,8 @@ export class OpenRouterProvider implements Provider {
         }
 
         if (!response.ok) {
-          const errorText = await response.text()
-          let message = errorText
-          try { const j = JSON.parse(errorText); message = j.message || j.error?.message || (typeof j.error === 'string' ? j.error : '') || errorText } catch {}
-          yield { type: 'error', error: response.status === 403 || response.status === 429 ? message : `API error ${response.status}: ${message}` }
+          const message = errorBodyMessage(await response.text())
+          yield { type: 'error', error: (response.status === 403 || response.status === 429) && message ? message : `API error ${response.status}${message ? `: ${message}` : ''}` }
           return
         }
 
@@ -259,24 +266,22 @@ export class OpenRouterProvider implements Provider {
         }
         const { done, value } = readResult
         if (done) {
-          trace('stream_end', { model, ms: since(), keepalives, sawDone: false, finishReason })
           if (signal.aborted) return
-          // Some upstreams close right after the last chunk (or send [DONE] without its blank line): an answer that finished is still whole
-          if ((finishReason && finishReason !== 'error') || /^data:\s*\[DONE\]/m.test(buffer)) { yield { type: 'message_complete', message: finalMessage(), usage }; return }
-          yield { type: 'error', error: 'The connection closed mid-answer' }
-          return
-        }
-        onActivity()
-        if (!firstByte) { firstByte = true; trace('first_byte', { model, ms: since() }) }
+          // Some upstreams close right after the last frame without its blank line: it still holds text, usage or [DONE]
+          buffer += decoder.decode() + '\n\n'
+        } else {
+          onActivity()
+          if (!firstByte) { firstByte = true; trace('first_byte', { model, ms: since() }) }
 
-        const text = decoder.decode(value, { stream: true })
-        keepalives += text.split('OPENROUTER PROCESSING').length - 1
-        // The server says how long it has been waiting for a provider to start
-        const wait = /: darce waiting (\d+)s( hedged)?/g
-        let w: RegExpExecArray | null, lastWait: RegExpExecArray | null = null
-        while ((w = wait.exec(text))) lastWait = w
-        if (lastWait && !firstToken) yield { type: 'waiting', seconds: Number(lastWait[1]), hedged: !!lastWait[2] }
-        buffer += text
+          const text = decoder.decode(value, { stream: true })
+          keepalives += text.split('OPENROUTER PROCESSING').length - 1
+          // The server says how long it has been waiting for a provider to start
+          const wait = /: darce waiting (\d+)s( hedged)?/g
+          let w: RegExpExecArray | null, lastWait: RegExpExecArray | null = null
+          while ((w = wait.exec(text))) lastWait = w
+          if (lastWait && !firstToken) yield { type: 'waiting', seconds: Number(lastWait[1]), hedged: !!lastWait[2] }
+          buffer += text
+        }
         const { frames, remaining } = parseSSEFrames(buffer)
         buffer = remaining
 
@@ -356,16 +361,29 @@ export class OpenRouterProvider implements Provider {
             }
           }
         }
+
+        if (done) {
+          trace('stream_end', { model, ms: since(), keepalives, sawDone: false, finishReason })
+          // An answer that finished is still whole even without [DONE]
+          if (finishReason && finishReason !== 'error') { yield { type: 'message_complete', message: finalMessage(), usage }; return }
+          yield { type: 'error', error: 'The connection closed mid-answer' }
+          return
+        }
       }
     } finally {
       reader.releaseLock()
     }
   }
 
-  async listModels(): Promise<Array<{ id: string; name: string }>> {
+  async listModels(timeoutMs = 15_000): Promise<Array<{ id: string; name: string }>> {
     const res = await fetch(`${this.baseUrl}/v1/models`, {
       headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      signal: AbortSignal.timeout(timeoutMs),
     })
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {})
+      throw new Error(`Couldn't list models: HTTP ${res.status}`)
+    }
     const data = await res.json() as { data: Array<{ id: string; name: string }> }
     return data.data.map(m => ({ id: m.id, name: m.name }))
   }

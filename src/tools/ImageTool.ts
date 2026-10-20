@@ -1,10 +1,11 @@
 import { z } from 'zod'
-import { writeFile, mkdir, readFile, stat } from 'node:fs/promises'
+import { writeFile, mkdir, readFile, stat, lstat } from 'node:fs/promises'
 import { resolve, dirname, extname } from 'node:path'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
 import { loadConfig } from '../config/config.js'
 import { keyOutBackground } from '../utils/keyBackground.js'
+import { outside } from '../core/risk.js'
 
 const RATIOS = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', 'auto'] as const
 
@@ -23,6 +24,19 @@ type Input = z.infer<typeof inputSchema>
 
 const MIME_EXT: Record<string, string> = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' }
 
+const EXTS = ['.png', '.jpg', '.jpeg', '.webp']
+
+/** Why the image can't be saved at `p`, if it can't. The path written must be exactly the one that was
+ *  risk-scored and snapshotted, or /undo misses it, so it is checked here and never adjusted. */
+async function badPath(p: string, cwd: string): Promise<string | undefined> {
+  const abs = resolve(cwd, p)
+  if (!p.trim() || abs === resolve(cwd)) return 'file_path must name an image file in the project, e.g. public/hero.png'
+  if (!EXTS.includes(extname(abs).toLowerCase())) return `${p} needs a .png, .jpg or .webp extension`
+  if (outside(p, cwd)) return `${p} is outside the project`
+  if (await lstat(abs).then(s => s.isSymbolicLink(), () => false)) return `${p} is a symlink; save the image to a regular path`
+  return undefined
+}
+
 function pngSize(buf: Buffer): string {
   if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47) return `${buf.readUInt32BE(16)}×${buf.readUInt32BE(20)}`
   return ''
@@ -36,6 +50,9 @@ export const ImageTool: ToolDef<typeof inputSchema, string> = {
   isConcurrencySafe: false,
 
   async call(input: Input, context: ToolContext): Promise<ToolResult<string>> {
+    // Before the request, so a bad path doesn't spend a generation
+    const bad = await badPath(input.file_path, context.cwd)
+    if (bad) return { data: `Error: ${bad}`, isError: true }
     const config = loadConfig()
     const base = (config.apiBase || 'https://api.darce.dev').replace(/\/$/, '')
     const refs: string[] = []
@@ -77,14 +94,22 @@ export const ImageTool: ToolDef<typeof inputSchema, string> = {
     if (input.transparent && (img.media_type ?? 'image/png') === 'image/png') {
       try { bytes = keyOutBackground(bytes); keyed = true } catch {}
     }
-    // Keep the extension honest: a PNG is saved as .png even if another was asked for
+    // Keep the extension honest without renaming: a renamed file is one undo never saw
     const want = MIME_EXT[img.media_type ?? 'image/png'] ?? '.png'
-    let filePath = resolve(context.cwd, input.file_path)
-    if (extname(filePath).toLowerCase() !== want && !(want === '.jpg' && extname(filePath).toLowerCase() === '.jpeg')) {
-      filePath = filePath.slice(0, filePath.length - extname(filePath).length) + want
+    const filePath = resolve(context.cwd, input.file_path)
+    const ext = extname(filePath).toLowerCase()
+    if (ext !== want && !(want === '.jpg' && ext === '.jpeg')) {
+      return { data: `Error: the image came back as ${want.slice(1).toUpperCase()}, so it wasn't saved to ${input.file_path}. Call Image again with a file_path ending in ${want}.`, isError: true }
     }
-    await mkdir(dirname(filePath), { recursive: true })
-    await writeFile(filePath, bytes)
+    // Generation takes a while; the path could have become a symlink since the first check
+    const late = await badPath(input.file_path, context.cwd)
+    if (late) return { data: `Error: ${late}`, isError: true }
+    try {
+      await mkdir(dirname(filePath), { recursive: true })
+      await writeFile(filePath, bytes)
+    } catch (err) {
+      return { data: `Error: couldn't save ${input.file_path} (${(err as Error).message})`, isError: true }
+    }
     const size = pngSize(bytes)
     const rel = filePath.startsWith(context.cwd + '/') ? filePath.slice(context.cwd.length + 1) : filePath
     const by = json.model ? ` with ${json.model.split('/').pop()}` : ''

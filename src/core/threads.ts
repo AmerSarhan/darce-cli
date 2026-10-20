@@ -57,8 +57,12 @@ export type RunThreadOptions = {
   beforeChange?: QueryParams['beforeChange']
   afterChange?: QueryParams['afterChange']
   onUpdate: () => void
+  /** A web page or search result entered the thread: its report can carry instructions from that page */
+  onWebContent?: () => void
   maxTurns?: number
 }
+
+export const WEB_TOOLS = new Set(['WebFetch', 'WebSearch', 'StealthFetch'])
 
 /** One-line summary of a tool call for a thread's log. */
 function describe(name: string, input: Record<string, unknown>): string {
@@ -102,6 +106,7 @@ export async function runThread(o: RunThreadOptions): Promise<void> {
       if (e.type === 'message_complete' && price) {
         t.cost += (e.usage.prompt_tokens / 1000) * price.costPer1kInput + (e.usage.completion_tokens / 1000) * price.costPer1kOutput
       }
+      if (e.type === 'tool_result_ready' && WEB_TOOLS.has(e.name) && !e.isError) o.onWebContent?.()
       if (e.type === 'error') t.error = e.error
       result = await gen.next()
     }

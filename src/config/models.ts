@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { ModelProfile } from '../types.js'
+import { writePrivate } from '../utils/privateFile.js'
 
 // Offline fallback — the live catalog is fetched from OpenRouter by loadModels()
 
@@ -100,7 +101,7 @@ export const MODEL_PROFILES: ModelProfile[] = [
 ]
 
 const MODELS_URL = 'https://openrouter.ai/api/v1/models'
-const CACHE_PATH = join(homedir(), '.darce', 'models.json')
+const cachePath = () => join(homedir(), '.darce', 'models.json')
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 let catalog: ModelProfile[] = MODEL_PROFILES
@@ -185,10 +186,17 @@ export function toModelProfiles(models: OpenRouterModel[]): ModelProfile[] {
     .sort((a, b) => (b.created ?? 0) - (a.created ?? 0))
 }
 
-function readCache(): { fetchedAt: number; models: ModelProfile[]; popular?: string[] } | null {
+type Cache = { fetchedAt: number; models: ModelProfile[]; popular?: string[] }
+
+// A cache of the wrong shape counts as no cache, so it's refetched instead of throwing before the fetch
+function readCache(): Cache | null {
   try {
-    if (!existsSync(CACHE_PATH)) return null
-    return JSON.parse(readFileSync(CACHE_PATH, 'utf-8'))
+    if (!existsSync(cachePath())) return null
+    const c = JSON.parse(readFileSync(cachePath(), 'utf-8'))
+    if (!c || typeof c.fetchedAt !== 'number' || !Array.isArray(c.models)) return null
+    const models = c.models.filter((m: unknown): m is ModelProfile => !!m && typeof (m as ModelProfile).id === 'string')
+    const popular = Array.isArray(c.popular) ? c.popular.filter((x: unknown): x is string => typeof x === 'string') : undefined
+    return { fetchedAt: c.fetchedAt, models, popular }
   } catch {
     return null
   }
@@ -209,8 +217,7 @@ export async function loadModels(opts: { force?: boolean } = {}): Promise<ModelP
   const popular = fetchPopularity()
   const writeCache = (models: ModelProfile[], ranking: string[]) => {
     try {
-      mkdirSync(join(homedir(), '.darce'), { recursive: true })
-      writeFileSync(CACHE_PATH, JSON.stringify({ fetchedAt: Date.now(), models, popular: ranking }))
+      writePrivate(cachePath(), JSON.stringify({ fetchedAt: Date.now(), models, popular: ranking }))
     } catch {}
   }
   try {
@@ -272,11 +279,11 @@ export const POPULAR_MODELS = [
   'deepseek/deepseek-v4.1-flash',
 ]
 
-const RECENT_PATH = join(homedir(), '.darce', 'recent-models.json')
+const recentPath = () => join(homedir(), '.darce', 'recent-models.json')
 
 export function recentModels(): string[] {
   try {
-    const data = JSON.parse(readFileSync(RECENT_PATH, 'utf-8'))
+    const data = JSON.parse(readFileSync(recentPath(), 'utf-8'))
     return Array.isArray(data) ? data.filter((x): x is string => typeof x === 'string') : []
   } catch {
     return []
@@ -286,8 +293,7 @@ export function recentModels(): string[] {
 export function recordModelUse(id: string) {
   try {
     const list = [id, ...recentModels().filter(m => m !== id)].slice(0, 6)
-    mkdirSync(join(homedir(), '.darce'), { recursive: true })
-    writeFileSync(RECENT_PATH, JSON.stringify(list))
+    writePrivate(recentPath(), JSON.stringify(list))
   } catch {}
 }
 

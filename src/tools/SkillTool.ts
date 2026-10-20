@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { join } from 'node:path'
 import type { ToolDef } from './Tool.js'
 import type { ToolResult, ToolContext } from '../types.js'
 import { discoverSkills, loadSkill } from '../core/skills.js'
@@ -10,6 +11,9 @@ const inputSchema = z.object({
 type Input = z.infer<typeof inputSchema>
 type Output = { name: string; body: string; dir?: string }
 
+// A skill is instructions, not data; a huge one would fill the context on its own
+const MAX_BODY = 50_000
+
 export const SkillTool: ToolDef<typeof inputSchema, Output> = {
   name: 'Skill',
   description: 'Load a skill: packaged instructions for a kind of task. Call it before starting work that matches a skill\'s description, then follow what it says.',
@@ -18,10 +22,19 @@ export const SkillTool: ToolDef<typeof inputSchema, Output> = {
   isConcurrencySafe: true,
 
   async call(input: Input, context: ToolContext): Promise<ToolResult<Output>> {
-    const skill = loadSkill(context.cwd, input.name)
+    let skill: Output | null
+    try {
+      skill = loadSkill(context.cwd, input.name)
+    } catch (err) {
+      return { data: { name: input.name, body: `Error: skill "${input.name}" is no longer readable (${(err as Error).message})` }, isError: true }
+    }
     if (!skill) {
       const names = discoverSkills(context.cwd).map(s => s.name).join(', ')
       return { data: { name: input.name, body: `No skill named "${input.name}". Available: ${names || '(none)'}` }, isError: true }
+    }
+    if (skill.body.length > MAX_BODY) {
+      const where = skill.dir ? ` Use Read on ${join(skill.dir, 'SKILL.md')} for the rest.` : ''
+      skill = { ...skill, body: `${skill.body.slice(0, MAX_BODY)}\n…(skill truncated at ${MAX_BODY} characters.${where})` }
     }
     return { data: skill }
   },

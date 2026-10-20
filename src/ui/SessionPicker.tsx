@@ -23,6 +23,8 @@ function ago(iso: string): string {
 }
 
 const short = (p: string) => (p.startsWith(homedir()) ? '~' + p.slice(homedir().length) : p)
+// A row has room for the folder's last two parts; the full path is in the header when it matters
+const tail = (p: string) => { const parts = short(p).split('/').filter(Boolean); return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : short(p) }
 
 /** /resume: pick a past conversation to continue. */
 export function SessionPicker({ cwd, currentSessionId, onSelect, onClose }: Props) {
@@ -58,10 +60,7 @@ export function SessionPicker({ cwd, currentSessionId, onSelect, onClose }: Prop
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={t.accent} paddingX={1} marginBottom={1}>
-      <Box justifyContent="space-between">
-        <Text bold>Resume a conversation <Text color={t.muted}>{everywhere ? 'all folders' : short(cwd)}</Text></Text>
-        <Text color={t.faint}>↑↓ move · tab {everywhere ? 'this folder' : 'all folders'} · enter resume · esc close</Text>
-      </Box>
+      <Text bold wrap="truncate-middle">Resume a conversation <Text color={t.muted}>{everywhere ? 'all folders' : short(cwd)}</Text></Text>
       <Text><Text color={t.accent}>› </Text>{query || <Text color={t.faint}>type to search</Text>}</Text>
       <Box flexDirection="column" marginTop={1}>
         {rows.length === 0 ? (
@@ -71,8 +70,8 @@ export function SessionPicker({ cwd, currentSessionId, onSelect, onClose }: Prop
           return (
             <Box key={s.sessionId}>
               <Text color={active ? t.accent : t.faint}>{active ? '▸ ' : '  '}</Text>
-              <Box flexGrow={1}><Text bold={active} wrap="truncate-end">{s.title}</Text></Box>
-              <Text color={t.faint}>  {s.count} {s.count === 1 ? 'msg' : 'msgs'} · {ago(s.savedAt)}{everywhere ? ` · ${short(s.cwd)}` : ''}</Text>
+              <Box flexGrow={1} flexShrink={1} minWidth={8}><Text bold={active} wrap="truncate-end">{s.title}</Text></Box>
+              <Box flexShrink={0}><Text color={t.faint}>  {s.count} {s.count === 1 ? 'msg' : 'msgs'} · {ago(s.savedAt)}{everywhere ? ` · ${tail(s.cwd)}` : ''}</Text></Box>
             </Box>
           )
         })}
@@ -82,6 +81,7 @@ export function SessionPicker({ cwd, currentSessionId, onSelect, onClose }: Prop
           <Text color={t.muted} wrap="truncate-end">Last reply: <Text color={t.text}>{pick.lastReply}</Text></Text>
         </Box>
       ) : null}
+      <Box marginTop={1}><Text color={t.faint} wrap="truncate-end">↑↓ move · tab {everywhere ? 'this folder' : 'all folders'} · enter resume · esc close</Text></Box>
     </Box>
   )
 }

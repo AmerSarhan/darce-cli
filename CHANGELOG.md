@@ -2,6 +2,40 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.18.0
+
+Stability. Four parts of Darce were audited this time (the streaming client, saved sessions and settings, the less-used tools, and the command line), and this release fixes what turned up.
+
+- **Your conversation is saved after every change, not only when a turn ends.** `/rewind`, derby and swarm results, `/compact` and quitting mid-task are saved too, so `--resume` no longer brings back steps you rewound. If saving fails (full disk, permissions), Darce says so once and keeps working. Before, it stayed stuck on "busy".
+- **Two windows on the same conversation no longer overwrite each other.** The second one to save continues as a new session, and `/resume` lists both.
+- **Pipe into `-p`.** `git diff | darce -p "review this"` and `cat log | darce -p "why did this fail"` add the piped text to the prompt, and `cat task.md | darce -p` uses it as the prompt.
+- **Safer approvals.**
+  - The check on scripts like `npm run build` runs again when the script changes. Before, an edited `package.json` script could reuse an earlier "safe" verdict.
+  - `cd web && npm run build` now checks `web/package.json`.
+  - After a sub-agent reads a web page, its shell commands ask first, the same as in the main conversation.
+- **Project files Darce reads at startup are bounded.** An `AGENTS.md`, `CLAUDE.md` or skill file that is huge, or a symlink to a device or to a file outside the project, used to hang startup or leak that file into the prompt. Now only the start of a regular file inside the project is read.
+- **Esc stops an edit even while Darce is taking its undo snapshot.**
+- **Image generation writes the file you named.** A type mismatch (`hero.jpg` getting PNG data) is reported instead of saving under a different name that `/undo` didn't cover.
+- **Command line:**
+  - `--mode=plan` and `--model=x` work. Before, `--mode=plan` was ignored and the run used auto mode.
+  - A flag without a value, or an unknown option, stops with a clear message instead of becoming part of the prompt.
+  - Words inside a prompt that look like flags stay in it (`darce -p what does ls -h do`).
+  - `darce -p … | head -1` exits cleanly instead of crashing.
+  - Hitting the step limit in `-p` exits with 1 and says so, so CI doesn't count unfinished work as success.
+  - `darce redeem` and `darce upgrade` exit with 1 when they fail.
+- **Login:**
+  - `darce login` no longer offers a trial that would replace the account you're signed in with.
+  - An invalid menu choice asks again instead of quitting silently.
+  - A `DARCE_API_BASE` you set for one shell is no longer saved into your settings for good.
+- **Memory** (`/memory`, Remember):
+  - Adding a note keeps lines you wrote yourself in the memory file.
+  - "use pnpm" is no longer rejected as a duplicate of "don't use pnpm".
+  - `/memory forget` needs at least 3 characters, so `forget e` can't wipe most notes.
+- **Settings files that are broken or hand-edited** (`"router": null`, a damaged `trust.json` or model cache) no longer crash Darce or get silently replaced.
+- **Streaming:** an answer that ends without a final blank line is no longer reported as "closed mid-answer". A proxy's HTML error page shows as one line instead of kilobytes of markup. Next-prompt suggestions and the critic no longer show half-finished text, and the critic gives up after 20 seconds.
+- **Smaller, faster files:** saved sessions keep images in the last few messages only. Sessions untouched for 60 days are deleted once there are more than 300. Prompt history skips pastes over 20,000 characters, and two windows no longer erase each other's history.
+- Smaller: the receipt's risk counts only steps that ran, the `/resume` list doesn't wrap in narrow terminals, web search skips one bad result instead of failing, very large skill files are cut with a note, skill files saved with a BOM load, and "1 file" / "1 step" read correctly.
+
 ## 0.17.2
 
 - **`/clear` no longer erases the conversation you cleared.** It starts a new saved session, so `/resume` still lists the old one. Before, the next message overwrote it.

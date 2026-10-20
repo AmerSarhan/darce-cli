@@ -1,4 +1,5 @@
-import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { Message } from '../types.js'
@@ -26,16 +27,39 @@ export type SessionSummary = {
 /** A session's summary plus the file mtime it was taken from; a changed mtime means re-read. */
 type IndexEntry = SessionSummary & { mtimeMs: number; corrupt?: boolean }
 
-export function saveSession(sessionId: string, messages: Message[], cwd: string) {
+/** Images stay in the last few messages only: a saved session with every screenshot in it grows to hundreds of MB. */
+const KEEP_IMAGES = 6
+function withoutOldImages(messages: Message[]): Message[] {
+  const from = messages.length - KEEP_IMAGES
+  return messages.map((m, i) => i >= from || typeof m.content === 'string' || !m.content.some(b => b.type === 'image')
+    ? m
+    : { ...m, content: m.content.map(b => b.type === 'image' ? { type: 'text' as const, text: `[image${b.name ? ` ${b.name}` : ''} not kept in the saved session]` } : b) })
+}
+
+/** The session file's mtime, to notice when another Darce window wrote it since. */
+export function sessionMtime(sessionId: string): number | undefined {
+  try { return statSync(join(sessionsDir(), `${sessionId}.json`)).mtimeMs } catch { return undefined }
+}
+
+/**
+ * Saves the conversation. `since` is the mtime from our last save or load: if the file changed after it, another
+ * window is continuing the same conversation, so this one forks to a new session instead of overwriting it.
+ * Throws when the file can't be written (full disk, permissions).
+ */
+export function saveSession(sessionId: string, messages: Message[], cwd: string, since?: number): { sessionId: string; mtimeMs: number } {
   ensureDir()
+  const now = sessionMtime(sessionId)
+  if (since !== undefined && now !== undefined && now !== since) sessionId = randomUUID()
   const file = `${sessionId}.json`
-  const data = { sessionId, cwd, messages, savedAt: new Date().toISOString() }
+  const data = { sessionId, cwd, messages: withoutOldImages(messages), savedAt: new Date().toISOString() }
   writePrivate(join(sessionsDir(), file), JSON.stringify(data))
+  const mtimeMs = statSync(join(sessionsDir(), file)).mtimeMs
   try {
     const entries = readIndex()
-    entries[file] = { ...summarize(data, file), mtimeMs: statSync(join(sessionsDir(), file)).mtimeMs }
+    entries[file] = { ...summarize(data, file), mtimeMs }
     writeIndex(entries)
   } catch {}
+  return { sessionId, mtimeMs }
 }
 
 export function loadLatestSession(cwd: string): { sessionId: string; messages: Message[] } | null {
@@ -117,8 +141,21 @@ function indexedSessions(): Array<[string, IndexEntry]> {
       next[file] = { sessionId: file.replace(/\.json$/, ''), cwd: '', savedAt: '', title: '', count: 0, lastReply: '', mtimeMs, corrupt: true }
     }
   }
+  if (prune(next)) changed = true
   if (changed || Object.keys(known).length !== Object.keys(next).length) writeIndex(next)
   return Object.entries(next)
+}
+
+const KEEP_SESSIONS = 300
+const PRUNE_AFTER_MS = 60 * 86400_000
+/** Beyond the newest 300, sessions untouched for 60 days are deleted, so the folder doesn't grow forever. */
+function prune(entries: Record<string, IndexEntry>): boolean {
+  const old = Object.entries(entries).sort(([, a], [, b]) => b.mtimeMs - a.mtimeMs).slice(KEEP_SESSIONS)
+    .filter(([, e]) => Date.now() - e.mtimeMs > PRUNE_AFTER_MS)
+  for (const [file] of old) {
+    try { unlinkSync(join(sessionsDir(), file)); delete entries[file] } catch {}
+  }
+  return old.length > 0
 }
 
 /** Past conversations, newest first. */
@@ -130,10 +167,11 @@ export function listSessions(limit = 60): SessionSummary[] {
     .slice(0, limit)
 }
 
-export function loadSession(sessionId: string): { sessionId: string; messages: Message[]; cwd: string } | null {
+export function loadSession(sessionId: string): { sessionId: string; messages: Message[]; cwd: string; mtimeMs?: number } | null {
   try {
+    const mtimeMs = sessionMtime(sessionId)
     const data = JSON.parse(readFileSync(join(sessionsDir(), `${sessionId}.json`), 'utf-8'))
-    return { sessionId: data.sessionId ?? sessionId, messages: data.messages ?? [], cwd: data.cwd ?? '' }
+    return { sessionId: data.sessionId ?? sessionId, messages: Array.isArray(data.messages) ? data.messages : [], cwd: data.cwd ?? '', mtimeMs }
   } catch {
     return null
   }

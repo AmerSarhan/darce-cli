@@ -2,18 +2,24 @@
 // Namespace import: a named import of enableCompileCache fails to link on Node 22.0, which lacks it
 import * as nodeModule from 'node:module'
 import { VERSION } from '../version.js'
+import { parseArgs } from './args.js'
 
 // Cache compiled code on disk (Node 22.1+): later launches skip recompiling Ink, React and Darce
 try { nodeModule.enableCompileCache?.() } catch { /* older Node or read-only cache dir: just slower */ }
 
 const args = process.argv.slice(2)
+const parsed = ['login', 'logout', 'signup', 'redeem', 'upgrade'].includes(args[0] ?? '') ? null : parseArgs(args)
+if (parsed && 'error' in parsed) {
+  console.error(parsed.error)
+  process.exit(2)
+}
 
-if (args.includes('--version') || args.includes('-v')) {
+if (parsed?.version) {
   console.log(VERSION)
   process.exit(0)
 }
 
-if (args.includes('--help') || args.includes('-h')) {
+if (parsed?.help) {
   console.log(`
   darce - the coding agent you can undo, by darce.dev
 
@@ -24,9 +30,11 @@ if (args.includes('--help') || args.includes('-h')) {
     darce signup                    Create a free account (keeps your trial and its history)
     darce login                     Sign in with your browser (or create an account)
     darce upgrade                   Upgrade to Builder or Power
+    darce redeem <code>             Redeem a promo code
     darce logout                    Remove saved credentials
     darce --resume, -r              Resume the last session here (/resume picks any past one)
-    darce -p "explain src/app.ts"   Print the answer and exit (for scripts and CI)
+    darce -p "explain src/app.ts"   Print the answer and exit (also --print; for scripts and CI)
+    git diff | darce -p "review"    Piped input is added to the prompt
     darce --mode plan               auto (default), ask, plan (read-only) or full
     darce --version                 Print version
     darce --help                    Show this help
@@ -64,48 +72,17 @@ if (args[0] === 'login') {
   })().catch(err => { console.error(err.message); process.exit(1) })
 } else if (args[0] === 'redeem') {
   const { redeemCode } = await import('../auth/redeem.js')
-  console.log(`\n  ${await redeemCode(args[1] ?? '')}\n`)
-  process.exit(0)
+  const r = await redeemCode(args[1] ?? '')
+  ;(r.ok ? console.log : console.error)(`\n  ${r.message}\n`)
+  process.exit(r.ok ? 0 : 1)
 } else if (args[0] === 'upgrade') {
-  upgradeFlow().then(() => process.exit(0)).catch(err => { console.error(err.message); process.exit(1) })
-} else {
-  // Parse --model flag
-  let modelOverride: string | undefined
-  const modelIndex = args.indexOf('--model')
-  if (modelIndex !== -1 && args[modelIndex + 1]) {
-    modelOverride = args[modelIndex + 1]
-    args.splice(modelIndex, 2)
-  }
-
-  const modeIndex = args.indexOf('--mode')
-  if (modeIndex !== -1 && args[modeIndex + 1]) {
-    // A typo here would silently decline every step in -p, or quietly fall back to auto
-    if (!['auto', 'ask', 'plan', 'full'].includes(args[modeIndex + 1]!)) {
-      console.error(`Unknown mode "${args[modeIndex + 1]}". Use auto, ask, plan or full.`)
-      process.exit(2)
-    }
-    process.env.DARCE_MODE = args[modeIndex + 1]
-    args.splice(modeIndex, 2)
-  }
-
-  const printMode = args.includes('--print') || args.includes('-p')
-  for (const flag of ['--print', '-p']) {
-    const i = args.indexOf(flag)
-    if (i !== -1) args.splice(i, 1)
-  }
-
-  const resumeSession = args.includes('--resume') || args.includes('-r')
-  if (resumeSession) {
-    const idx = args.indexOf('--resume')
-    if (idx !== -1) args.splice(idx, 1)
-    const idx2 = args.indexOf('-r')
-    if (idx2 !== -1) args.splice(idx2, 1)
-  }
-
-  const initialPrompt = args.join(' ').trim() || undefined
-  const run = printMode || (!process.stdout.isTTY && initialPrompt)
-    ? printMain(modelOverride, initialPrompt)
-    : main(modelOverride, initialPrompt, resumeSession)
+  upgradeFlow().then(ok => process.exit(ok ? 0 : 1)).catch(err => { console.error(err.message); process.exit(1) })
+} else if (parsed && !('error' in parsed)) {
+  if (parsed.mode) process.env.DARCE_MODE = parsed.mode
+  // Piped in or out with a prompt (`git diff | darce "review this"`) is a script, not a session
+  const run = parsed.print || ((!process.stdout.isTTY || !process.stdin.isTTY) && parsed.prompt)
+    ? printMain(parsed.model, parsed.prompt)
+    : main(parsed.model, parsed.prompt, parsed.resume)
   run.catch(err => {
     console.error('Fatal error:', err.message)
     process.exit(1)
@@ -156,13 +133,13 @@ async function logoutFlow() {
   process.exit(0)
 }
 
-async function upgradeFlow() {
+async function upgradeFlow(): Promise<boolean> {
   const { loadConfig } = await import('../config/config.js')
   const config = loadConfig()
   await exitIfRcBroken(!!config.apiKey)
   if (!config.apiKey) {
-    console.log('\n  Not logged in. Run `darce login` first.\n')
-    return
+    console.error('\n  Not logged in. Run `darce login` first.\n')
+    return false
   }
 
   console.log('\n  Creating checkout session...')
@@ -178,17 +155,17 @@ async function upgradeFlow() {
       },
     })
   } catch (err) {
-    console.log(`  ${(err as Error).message}\n`)
-    process.exit(1)
+    console.error(`  ${(err as Error).message}\n`)
+    return false
   }
 
   if (!r.ok) {
     if (r.data.error === 'Already on Pro') {
-      console.log('  You\'re already on Pro!\n')
-    } else {
-      console.log(`  Error: ${failure(r, 'Failed to create checkout')}\n`)
+      console.log('  You\'re already on Pro.\n')
+      return true
     }
-    return
+    console.error(`  Error: ${failure(r, 'Failed to create checkout')}\n`)
+    return false
   }
 
   const url = typeof r.data.url === 'string' ? r.data.url : ''
@@ -198,6 +175,7 @@ async function upgradeFlow() {
   // Try to open browser automatically (no shell, https only)
   const { openInBrowser } = await import('../core/billing.js')
   if (url) openInBrowser(url)
+  return !!url
 }
 
 // === Main REPL ===
@@ -304,8 +282,16 @@ async function main(modelOverride?: string, initialPrompt?: string, resumeSessio
 
 // === Print mode: plain output for scripts, pipes and CI ===
 async function printMain(modelOverride?: string, prompt?: string) {
+  // `darce -p … | head -1` closes the pipe early: that's the reader being done, not a crash
+  process.stdout.on('error', (e: NodeJS.ErrnoException) => process.exit(e.code === 'EPIPE' ? 0 : 1))
+  const { readPipedStdin, STDIN_LIMIT } = await import('../utils/stdin.js')
+  const piped = await readPipedStdin(process.stdin, 0, 1500, prompt ? 3000 : undefined)
+  if (piped) {
+    const note = piped.truncated ? `\n(Input cut at ${STDIN_LIMIT.toLocaleString('en-US')} bytes.)` : ''
+    prompt = prompt ? `${prompt}\n\n<stdin>\n${piped.text}\n</stdin>${note}` : piped.text + note
+  }
   if (!prompt) {
-    console.error('Usage: darce -p "your task"')
+    console.error('Usage: darce -p "your task", or pipe it in: cat task.md | darce -p')
     process.exit(2)
   }
   const { loadConfig } = await import('../config/config.js')
@@ -376,5 +362,8 @@ async function printMain(modelOverride?: string, prompt?: string) {
     result = await gen.next()
   }
   if (!atLineStart) process.stdout.write('\n')
-  process.exit(failed || result.value.reason === 'error' ? 1 : result.value.reason === 'aborted' ? 130 : 0)
+  const reason = result.value.reason
+  // A script must not mistake unfinished work for success
+  if (reason === 'max_turns') process.stderr.write(`Stopped after ${config.maxTurns} steps without finishing. Raise maxTurns in ~/.darcerc, or split the task.\n`)
+  process.exit(failed || reason === 'error' || reason === 'max_turns' ? 1 : reason === 'aborted' ? 130 : 0)
 }

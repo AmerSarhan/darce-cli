@@ -1,25 +1,34 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { writePrivate } from '../utils/privateFile.js'
+import { readSettingsFile, ConfigFileError } from '../config/config.js'
+import { trace } from '../utils/logger.js'
 
 // "Always allow" rules, per project directory: { "/path/to/repo": ["npm install", "git push"] }
-const TRUST_PATH = join(homedir(), '.darce', 'trust.json')
+const trustPath = () => join(homedir(), '.darce', 'trust.json')
 
-function load(): Record<string, string[]> {
+const rules = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+
+export function trustedKeys(cwd: string): Set<string> {
   try {
-    return JSON.parse(readFileSync(TRUST_PATH, 'utf-8'))
+    return new Set(rules(readSettingsFile(trustPath())[cwd]))
   } catch {
-    return {}
+    // Broken file (backed up by readSettingsFile): nothing is trusted, so everything asks
+    return new Set()
   }
 }
 
-export function trustedKeys(cwd: string): Set<string> {
-  return new Set(load()[cwd] ?? [])
-}
-
-export function addTrust(cwd: string, key: string) {
-  const all = load()
-  all[cwd] = [...new Set([...(all[cwd] ?? []), key])]
-  writePrivate(TRUST_PATH, JSON.stringify(all, null, 2))
+/** Save an "always allow" rule. Returns why it couldn't be saved, or null. A broken trust.json is left alone, not replaced. */
+export function addTrust(cwd: string, key: string): string | null {
+  try {
+    const all = readSettingsFile(trustPath())
+    all[cwd] = [...new Set([...rules(all[cwd]), key])]
+    writePrivate(trustPath(), JSON.stringify(all, null, 2))
+    return null
+  } catch (err) {
+    // Called from a keypress handler, where a throw would take the whole app down
+    const message = err instanceof ConfigFileError ? err.message : `Couldn't save the rule: ${(err as Error).message}`
+    trace('config_error', { file: 'trust.json', error: message })
+    return message
+  }
 }

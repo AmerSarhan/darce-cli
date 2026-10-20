@@ -26,7 +26,7 @@ function recap(messages: Message[]): string {
  * Predict the user's most likely next request. Returns null when there's no
  * confident guess, on any error, or when it would take too long.
  */
-export async function predictNext(provider: Provider, model: string, messages: Message[], signal?: AbortSignal): Promise<string | null> {
+export async function predictNext(provider: Provider, model: string, messages: Message[], signal?: AbortSignal, timeoutMs = 8000): Promise<string | null> {
   const prompt = [
     'Here is the end of a session between a developer and Darce, a coding agent in their terminal:',
     '',
@@ -38,7 +38,8 @@ export async function predictNext(provider: Provider, model: string, messages: M
   ].join('\n')
 
   let text = ''
-  const timeout = AbortSignal.timeout(8000)
+  let complete = false
+  const timeout = AbortSignal.timeout(timeoutMs)
   try {
     for await (const e of provider.stream(
       [{ role: 'system', content: 'You predict what a developer will type next. Reply with the prediction only.' }, { role: 'user', content: prompt }],
@@ -47,12 +48,14 @@ export async function predictNext(provider: Provider, model: string, messages: M
       signal ? AbortSignal.any([signal, timeout]) : timeout,
     )) {
       if (e.type === 'text_delta') text += e.text
-      if (e.type === 'message_complete') addUsage(model, e.usage)
+      if (e.type === 'message_complete') { complete = true; addUsage(model, e.usage) }
       if (e.type === 'error') return null
     }
   } catch {
     return null
   }
+  // A timeout ends the stream quietly: half a sentence would be offered as the guess
+  if (!complete) return null
   const guess = text.trim().split('\n')[0]!.replace(/^["'`>\s-]+|["'`.\s]+$/g, '')
   if (!guess || /^none$/i.test(guess) || guess.length > 100) return null
   return echoesExample(guess, recap(messages)) ? null : guess

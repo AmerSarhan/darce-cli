@@ -129,6 +129,29 @@ export function saveGlobalSetting(key: string, value: unknown): boolean {
   }
 }
 
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/**
+ * Drop hand-edited values of the wrong type (`"router": null`, `"maxTurns": "50"`) so the defaults
+ * show through instead of the app failing at startup on `config.router.default`.
+ */
+function checkShapes(rc: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!rc) return null
+  const defaults = DEFAULTS as unknown as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(rc)) {
+    if (v === null || v === undefined) continue
+    if (k === 'router') {
+      if (!isObject(v)) continue
+      const router: Record<string, unknown> = { ...v }
+      if (typeof router.default !== 'string' || !router.default) delete router.default
+      if (!Array.isArray(router.rules)) delete router.rules
+      out.router = router
+    } else if (!(k in defaults) || typeof v === typeof defaults[k]) out[k] = v
+  }
+  return out
+}
+
 export function loadConfig(): DarceConfig {
   // A broken ~/.darcerc is reported by globalRcProblem(); here it just contributes nothing
   let globalRc: Record<string, unknown> | null = null
@@ -145,5 +168,5 @@ export function loadConfig(): DarceConfig {
     envOverrides.router = { default: process.env.DARCE_MODEL }
   }
 
-  return deepMerge(DEFAULTS as unknown as Record<string, unknown>, globalRc, projectRc, envOverrides) as unknown as DarceConfig
+  return deepMerge(DEFAULTS as unknown as Record<string, unknown>, checkShapes(globalRc), checkShapes(projectRc), envOverrides) as unknown as DarceConfig
 }

@@ -8,8 +8,18 @@ import { trace } from '../utils/logger.js'
  * Saved Darce accounts. The active one is mirrored into ~/.darcerc (apiKey/apiBase)
  * so everything else keeps reading config the way it always has.
  */
-export type Account = { email: string; apiKey: string; apiBase: string; addedAt: string }
+export type Account = { email: string; apiKey: string; apiBase?: string; addedAt: string }
 type Store = { active?: string; accounts: Record<string, Account> }
+
+export const DEFAULT_API_BASE = 'https://api.darce.dev'
+
+/**
+ * The endpoint worth saving with a key, or undefined. DARCE_API_BASE is a per-shell override: saved, it
+ * would pin every later run to that server after the variable is gone. The default needs no saving.
+ */
+export function savedApiBase(base?: string): string | undefined {
+  return base && base !== DEFAULT_API_BASE && base !== process.env.DARCE_API_BASE ? base : undefined
+}
 
 const STORE = () => join(homedir(), '.darce', 'accounts.json')
 function load(): Store {
@@ -33,7 +43,8 @@ function writeRc(account: Account | null) {
     updateGlobalRc(rc => {
       if (account) {
         rc.apiKey = account.apiKey
-        rc.apiBase = account.apiBase
+        if (account.apiBase) rc.apiBase = account.apiBase
+        else delete rc.apiBase
       } else {
         delete rc.apiKey
         delete rc.apiBase
@@ -50,9 +61,10 @@ export function listAccounts(): { active?: string; accounts: Account[] } {
   return { active: s.active, accounts: Object.values(s.accounts) }
 }
 
-export function addAccount(email: string, apiKey: string, apiBase = 'https://api.darce.dev'): Account {
+export function addAccount(email: string, apiKey: string, apiBase?: string): Account {
   const s = load()
-  const account: Account = { email: email.toLowerCase(), apiKey, apiBase, addedAt: new Date().toISOString() }
+  const base = savedApiBase(apiBase)
+  const account: Account = { email: email.toLowerCase(), apiKey, ...(base ? { apiBase: base } : {}), addedAt: new Date().toISOString() }
   s.accounts[account.email] = account
   s.active = account.email
   save(s)
@@ -104,7 +116,7 @@ export function describeUsage(info: AccountInfo): string {
   return `${Math.round(u.used_pct)}% of ${span} used${resets}`
 }
 
-export async function fetchAccount(apiKey: string, apiBase = 'https://api.darce.dev'): Promise<AccountInfo | null> {
+export async function fetchAccount(apiKey: string, apiBase = DEFAULT_API_BASE): Promise<AccountInfo | null> {
   try {
     const res = await fetch(`${apiBase}/v1/account`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10_000) })
     if (!res.ok) return null

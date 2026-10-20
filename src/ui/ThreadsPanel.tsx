@@ -2,6 +2,7 @@ import React from 'react'
 import { Box, Text, useAnimation } from 'ink'
 import { theme } from './theme.js'
 import type { Thread } from '../core/threads.js'
+import { plural } from '../utils/plural.js'
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
@@ -28,7 +29,7 @@ export function ThreadsPanel({ threads, title = 'Threads' }: { threads: Thread[]
             <Box width={34}><Text bold={th.status === 'running'} wrap="truncate-end">{th.title}</Text></Box>
             <Box width={9}><Text color={t.faint}>{th.kind}</Text></Box>
             <Box flexGrow={1}><Text color={th.status === 'error' ? t.danger : t.muted} wrap="truncate-end">{th.status === 'error' ? th.error : th.activity}</Text></Box>
-            <Text color={t.faint}> {th.steps ? `${th.steps} steps · ` : ''}{elapsed}</Text>
+            <Text color={t.faint}> {th.steps ? `${plural(th.steps, 'step')} · ` : ''}{elapsed}</Text>
           </Box>
         )
       })}

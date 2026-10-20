@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { allTools } from '../tools/registry.js'
 import { shellPromptLine } from '../tools/shell.js'
-import { skillIndex } from './skills.js'
+import { skillIndex, readTextHead } from './skills.js'
 import { ENGINEERING_STANDARDS } from '../skills/builtin.js'
 import { readMemory } from './memory.js'
 
@@ -29,13 +29,10 @@ function getGitContext(cwd: string): string | null {
 /** Project instruction files, the cross-agent convention (AGENTS.md, CLAUDE.md, …). */
 const INSTRUCTION_FILES = ['AGENTS.md', 'DARCE.md', 'CLAUDE.md', '.claude/CLAUDE.md', '.cursorrules', '.github/copilot-instructions.md']
 
-function readCapped(path: string, cap: number): string | null {
-  try {
-    const text = readFileSync(path, 'utf-8').trim()
-    return text.length > cap ? text.slice(0, cap) + '\n…(truncated)' : text
-  } catch {
-    return null
-  }
+function readCapped(path: string, cap: number, root?: string): string | null {
+  const text = readTextHead(path, cap, root)?.trim()
+  if (!text) return null
+  return text.length > cap ? text.slice(0, cap) + '\n…(truncated)' : text
 }
 
 export function projectInstructions(cwd: string): string[] {
@@ -45,7 +42,8 @@ export function projectInstructions(cwd: string): string[] {
   if (global) { out.push(`From ~/.darce/AGENTS.md (the user's own rules for every project):\n${global}`); budget -= global.length }
   for (const f of INSTRUCTION_FILES) {
     if (budget <= 500) break
-    const text = readCapped(join(cwd, f), Math.min(8000, budget))
+    // Project files must really live in the project: a symlink could point at ~/.ssh or /dev/zero
+    const text = readCapped(join(cwd, f), Math.min(8000, budget), cwd)
     if (text) { out.push(`From ${f}:\n${text}`); budget -= text.length }
   }
   return out

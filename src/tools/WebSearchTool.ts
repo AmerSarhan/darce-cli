@@ -37,7 +37,10 @@ export function parseDuckDuckGo(html: string): Result[] {
     if (!a) continue
     let url = a[1]!.replace(/&amp;/g, '&')
     const uddg = url.match(/[?&]uddg=([^&]+)/)
-    if (uddg) url = decodeURIComponent(uddg[1]!)
+    if (uddg) {
+      // One malformed link shouldn't cost the whole page of results
+      try { url = decodeURIComponent(uddg[1]!) } catch { continue }
+    }
     if (url.startsWith('//')) url = `https:${url}`
     if (/duckduckgo\.com\/y\.js|\/\/duckduckgo\.com\/l\/\?.*ad_/.test(url)) continue // ads
     const snippet = block.match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(a|div)>/)?.[1] ?? ''

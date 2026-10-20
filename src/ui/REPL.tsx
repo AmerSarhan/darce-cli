@@ -20,7 +20,7 @@ import { buildSystemPrompt } from '../core/context.js'
 import { compactMessages, rewindCut, markStopped } from '../core/conversation.js'
 import { selectModel } from '../providers/router.js'
 import { executeCommand, isSlashCommand } from '../core/commands.js'
-import { saveSession } from '../state/sessions.js'
+import { saveSession, sessionMtime } from '../state/sessions.js'
 import { loadHistory, saveHistory } from '../state/history.js'
 import { estimateMessagesTokens } from '../utils/tokens.js'
 import type { CommandContext } from '../core/commands.js'
@@ -46,7 +46,7 @@ import { setTasteEnabled, tasteEnabled } from '../taste/check.js'
 import { DEFAULT_GEARS, gearIndex, shiftGear, priceNote } from '../config/gears.js'
 import { createCheckout, openInBrowser } from '../core/billing.js'
 import { DISCORD_URL } from '../community.js'
-import { readMemory, memoryPath, forget } from '../core/memory.js'
+import { readMemory, memoryPath, forget, forgetProblem } from '../core/memory.js'
 import { listAccounts, addAccount, switchAccount, removeAccount, fetchAccount, describeUsage } from '../auth/accounts.js'
 import { browserLogin } from '../auth/browserLogin.js'
 import { discoverSkills } from '../core/skills.js'
@@ -68,7 +68,7 @@ import type { Narrator, VoiceEvent } from '../core/voice.js'
 import { brain } from '../brain/bus.js'
 import { projectPath } from '../brain/graph.js'
 import { resolve as resolvePathAbs } from 'node:path'
-import { runThread, Mutex, type Thread } from '../core/threads.js'
+import { runThread, Mutex, WEB_TOOLS, type Thread } from '../core/threads.js'
 import type { SpawnRequest } from '../types.js'
 import { ThreadsPanel } from './ThreadsPanel.js'
 import { planSwarm, laneNote, type SwarmPart } from '../core/swarm.js'
@@ -76,6 +76,7 @@ import { trace, recentTrace } from '../utils/logger.js'
 import { SessionPicker } from './SessionPicker.js'
 import { loadSession, type SessionSummary } from '../state/sessions.js'
 import { secondOpinion, wantsSecondOpinion } from '../core/riskcheck.js'
+import { plural } from '../utils/plural.js'
 
 type Props = {
   provider: Provider
@@ -145,6 +146,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const { exit: inkExit } = useApp()
   // Quitting must always work: if anything holds the process open after Ink unmounts, end it anyway
   const exit = useCallback(() => {
+    // Quitting mid-task keeps what the conversation has so far
+    try { persistRef.current() } catch {}
     inkExit()
     setTimeout(() => process.exit(0), 1500).unref()
   }, [inkExit])
@@ -175,7 +178,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       const initial: TranscriptItem[] = [banner()]
       if (restored?.length) {
         initial.push(...itemsFromMessages(restored))
-        initial.push({ kind: 'system', id: newId(), text: `Resumed session ${state.sessionId.slice(0, 8)} (${restored.length} messages).` })
+        initial.push({ kind: 'system', id: newId(), text: `Resumed session ${state.sessionId.slice(0, 8)} (${plural(restored.length, 'message')}).` })
       }
       setItems(prev => [...initial, ...prev])
     }
@@ -300,6 +303,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   const notesRef = useRef<string[]>([])
   const lastToolRef = useRef<{ name: string; summary: string; result: string; display?: ToolDisplay } | null>(null)
   const taintedRef = useRef(false)
+  const markTainted = useCallback(() => { taintedRef.current = true; setTainted(true) }, [])
   const modeRef = useRef(state.mode)
   modeRef.current = state.mode
   const gears = state.config.gears?.length ? state.config.gears : DEFAULT_GEARS
@@ -337,6 +341,31 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   }, [])
 
   const commit = useCallback((item: TranscriptItem) => setItems(prev => [...prev, item]), [])
+
+  // Saved after every change to the conversation (turns, /rewind, derby, swarm), not only at the end of a turn
+  const sessionIdRef = useRef(state.sessionId)
+  const savedMtimeRef = useRef<number | undefined>(restored?.length ? sessionMtime(state.sessionId) : undefined)
+  const saveFailed = useRef(false)
+  const persist = useCallback(() => {
+    if (!messagesRef.current.length) return
+    try {
+      const r = saveSession(sessionIdRef.current, messagesRef.current, state.cwd, savedMtimeRef.current)
+      savedMtimeRef.current = r.mtimeMs
+      saveFailed.current = false
+      if (r.sessionId !== sessionIdRef.current) {
+        sessionIdRef.current = r.sessionId
+        setState(prev => ({ ...prev, sessionId: r.sessionId }))
+        provider.setSession?.(r.sessionId)
+        commit({ kind: 'system', id: newId(), text: 'Another Darce window saved this conversation too, so this window now saves it as a new session. /resume lists both.' })
+      }
+    } catch (err) {
+      // Once, not after every message; the turn must still finish normally
+      if (!saveFailed.current) commit({ kind: 'error', id: newId(), text: `Couldn't save this conversation: ${(err as Error).message.split('\n')[0]}. /resume won't have the latest messages until saving works again.` })
+      saveFailed.current = true
+    }
+  }, [commit, setState, provider, state.cwd])
+  const persistRef = useRef(persist)
+  persistRef.current = persist
 
   useEffect(() => {
     if (state.modelOverride) modelRef.current = state.modelOverride
@@ -467,9 +496,16 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     setProgress('busy')
 
     let approvalQueue: Promise<unknown> = Promise.resolve()
+    // The receipt's risk is what actually ran: a declined or plan-mode step doesn't count
     const authorize = async (call: { id: string; name: string; input: Record<string, unknown> }, origin?: string) => {
+      const ran = { level: 0 }
+      const d = await decide(call, ran, origin)
+      if (d.allow) receipt.maxRisk = Math.max(receipt.maxRisk, ran.level) as ReceiptData['maxRisk']
+      return d
+    }
+    const decide = async (call: { id: string; name: string; input: Record<string, unknown> }, ran: { level: number }, origin?: string) => {
       let risk = toolRisk(call.name, call.input, state.cwd)
-      receipt.maxRisk = Math.max(receipt.maxRisk, risk.level) as ReceiptData['maxRisk']
+      ran.level = risk.level
       const mode = modeRef.current
       // "Always allow" covers one plain command only, never chains like `npm install && curl …`
       const cmdText = String(call.input.command ?? '')
@@ -482,7 +518,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         const second = await secondOpinion(cmdText, state.cwd, state.config.apiKey, state.config.apiBase || undefined)
         if (second && second.level > risk.level) risk = second
       }
-      receipt.maxRisk = Math.max(receipt.maxRisk, risk.level) as ReceiptData['maxRisk']
+      ran.level = risk.level
       const autoOk = mode === 'auto' && risk.level <= 1 && !(taintedRef.current && call.name === 'Bash')
       if (autoOk) return { allow: true as const }
 
@@ -541,6 +577,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       const run = () => runThread({
         thread: t, prompt: req.prompt, cwd: state.cwd, provider, passEnv: state.config.passEnv, signal: controller.signal,
         authorize: call => authorize(call, `thread ${t.id}: ${t.title}`), beforeChange, afterChange, onUpdate: bumpThreads,
+        onWebContent: markTainted,
       })
       await (req.kind === 'work' ? workMutexRef.current.run(run) : run())
       if (t.status === 'done') return { report: t.report }
@@ -665,10 +702,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
                 })
               }
             }
-            if (['WebFetch', 'WebSearch', 'StealthFetch'].includes(event.name) && !event.isError) {
-              taintedRef.current = true
-              setTainted(true)
-            }
+            if (WEB_TOOLS.has(event.name) && !event.isError) markTainted()
             setActivity({ label: 'Thinking', startedAt: Date.now() })
             break
           }
@@ -730,7 +764,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       setActivity(null)
       abortRef.current = null
       setContextTokens(estimateMessagesTokens(messagesRef.current))
-      if (messagesRef.current.length > 0) saveSession(state.sessionId, messagesRef.current, state.cwd)
+      persistRef.current()
       trace('turn_end', { ms: Date.now() - turnStarted, stopped: controller.signal.aborted })
       setBusy(false)
       if (suggestRef.current && !controller.signal.aborted) {
@@ -763,6 +797,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     // Cut the conversation back to before the message that made this step
     const cut = cp.toolUseId ? rewindCut(messagesRef.current, cp.toolUseId, kept) : -1
     if (cut >= 0) messagesRef.current = messagesRef.current.slice(0, cut)
+    persistRef.current()
     setContextTokens(estimateMessagesTokens(messagesRef.current))
     commit({ kind: 'system', id: newId(), text: `Rewound to before: ${cp.label}\n${undoLines(r, cps.gitRoot ?? state.cwd, !!cps.gitRoot)}${cut >= 0 ? '\nThe conversation was rewound to the same point.' : ''}` })
     notesRef.current.push(`the user rewound the project to before your step "${cp.label}"`)
@@ -803,7 +838,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       commit({ kind: 'assistant', id: newId(), text: r.answer.trim() })
       commit({ kind: 'system', id: newId(), text: `That was ${r.model.split('/').pop()}'s answer ($${r.cost.toFixed(4)}, ${Math.round(r.ms / 1000)}s).` })
       messagesRef.current = [...messagesRef.current, { role: 'user', content: task }, { role: 'assistant', content: r.answer.trim() }]
-      setContextTokens(estimateMessagesTokens(messagesRef.current))
+      persistRef.current(); setContextTokens(estimateMessagesTokens(messagesRef.current))
     } else if (applyIndex !== null) {
       const r = d.racers[applyIndex]!
       await checkpointsRef.current!.snapshot(`Derby: apply ${r.model.split('/').pop()}`)
@@ -815,7 +850,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         { role: 'user', content: task },
         { role: 'assistant', content: `${r.answer.trim() || 'Done.'}\n\n(These changes came from ${r.model} in a model derby and are now applied.)` },
       ]
-      setContextTokens(estimateMessagesTokens(messagesRef.current))
+      persistRef.current(); setContextTokens(estimateMessagesTokens(messagesRef.current))
     } else {
       d.stop()
       commit({ kind: 'system', id: newId(), text: 'Derby discarded. Your files were not changed.' })
@@ -891,7 +926,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         { role: 'user', content: `/swarm ${task}` },
         { role: 'assistant', content: `The swarm finished and its changes are merged into the working tree.\n\n${report}${conflicts.length ? `\n\nOverlapping edits not merged: ${conflicts.map(c => c.path).join(', ')}` : ''}` },
       ]
-      setContextTokens(estimateMessagesTokens(messagesRef.current))
+      persistRef.current(); setContextTokens(estimateMessagesTokens(messagesRef.current))
     } else {
       d.stop()
       commit({ kind: 'system', id: newId(), text: 'Swarm discarded. Your files were not changed.' })
@@ -907,12 +942,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (!loaded) { commit({ kind: 'system', id: newId(), text: 'Couldn\'t open that conversation; its file may have been removed.' }); return }
     // Continue in the same session file, so the conversation keeps growing in one place
     messagesRef.current = loaded.messages
+    sessionIdRef.current = loaded.sessionId
+    savedMtimeRef.current = loaded.mtimeMs
     setState(prev => ({ ...prev, sessionId: loaded.sessionId }))
     provider.setSession?.(loaded.sessionId)
     commit({ kind: 'system', id: newId(), text: `── Resuming "${summary.title}" ──` })
     for (const item of itemsFromMessages(loaded.messages)) commit(item)
     const elsewhere = loaded.cwd && loaded.cwd !== state.cwd
-    commit({ kind: 'system', id: newId(), text: `Resumed ${loaded.messages.length} messages.${elsewhere ? ` This conversation started in ${loaded.cwd}; Darce is working in ${state.cwd}, so file paths may differ.` : ''} Carry on where you left off.` })
+    commit({ kind: 'system', id: newId(), text: `Resumed ${plural(loaded.messages.length, 'message')}.${elsewhere ? ` This conversation started in ${loaded.cwd}; Darce is working in ${state.cwd}, so file paths may differ.` : ''} Carry on where you left off.` })
     setContextTokens(estimateMessagesTokens(loaded.messages))
     trace('resume', { messages: loaded.messages.length, elsewhere: !!elsewhere })
   }, [commit, setState, state.cwd, provider])
@@ -925,7 +962,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         if (text.startsWith('/compact')) {
           const before = messagesRef.current.length
           messagesRef.current = compactMessages(messagesRef.current)
-          setContextTokens(estimateMessagesTokens(messagesRef.current))
+          persistRef.current(); setContextTokens(estimateMessagesTokens(messagesRef.current))
           commit({ kind: 'system', id: newId(), text: before === messagesRef.current.length
             ? 'Nothing to compact yet.'
             : `Compacted ${before} messages to ${messagesRef.current.length}: your first request and the recent context are kept.` })
@@ -937,6 +974,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       },
       newSession: () => {
         const id = randomUUID()
+        sessionIdRef.current = id
+        savedMtimeRef.current = undefined
         setState(prev => ({ ...prev, sessionId: id }))
         provider.setSession?.(id)
       },
@@ -950,7 +989,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       const cps = checkpointsRef.current!
       void cps.undo().then(r => {
         if (!r.ok) { commit({ kind: 'system', id: newId(), text: r.reason }); return }
-        commit({ kind: 'system', id: newId(), text: `Undid: ${r.label}\n${undoLines(r, cps.gitRoot ?? state.cwd, !!cps.gitRoot)}\n${cps.count} earlier change(s) can still be undone.` })
+        commit({ kind: 'system', id: newId(), text: `Undid: ${r.label}\n${undoLines(r, cps.gitRoot ?? state.cwd, !!cps.gitRoot)}\n${plural(cps.count, 'earlier change')} can still be undone.` })
         notesRef.current.push(`the user undid your change "${r.label}" — those files are back to how they were before it${r.kept?.length ? ` (except ${r.kept.length} file(s) changed again since, which were left as they are)` : ''}`)
       })
       return
@@ -962,7 +1001,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         if (diffs.length === 0) { commit({ kind: 'system', id: newId(), text: 'No files have changed since this session started.' }); return }
         const added = diffs.reduce((n, d) => n + d.added, 0)
         const removed = diffs.reduce((n, d) => n + d.removed, 0)
-        commit({ kind: 'system', id: newId(), text: `${diffs.length} file(s) changed this session, +${added} −${removed}` })
+        commit({ kind: 'system', id: newId(), text: `${plural(diffs.length, 'file')} changed this session, +${added} −${removed}` })
         for (const d of diffs) commit({ kind: 'expanded', id: newId(), name: d.created ? 'new file' : 'changed', summary: d.path, result: '', display: d })
       })
       return
@@ -1036,6 +1075,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       const arg = result.slice(11)
       if (arg.startsWith('forget ')) {
         const what = arg.slice(7)
+        const problem = forgetProblem(what)
+        if (problem) { commit({ kind: 'system', id: newId(), text: problem }); return }
         const n = forget('user', state.cwd, what) + forget('project', state.cwd, what)
         resetContext()
         commit({ kind: 'system', id: newId(), text: n ? `Forgot ${n} note${n === 1 ? '' : 's'} matching "${what}".` : `Nothing in memory matches "${what}".` })
@@ -1073,7 +1114,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       return
     }
     if (result?.startsWith('__REDEEM__:')) {
-      void import('../auth/redeem.js').then(m => m.redeemCode(result.slice(11))).then(text => commit({ kind: 'system', id: newId(), text }))
+      void import('../auth/redeem.js').then(m => m.redeemCode(result.slice(11), { apiKey: state.config.apiKey, apiBase: state.config.apiBase })).then(r => commit({ kind: r.ok ? 'system' : 'error', id: newId(), text: r.message }))
       return
     }
     if (result?.startsWith('__BRAIN__:')) {
@@ -1159,13 +1200,13 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       if (!all.length) { commit({ kind: 'system', id: newId(), text: 'No threads yet. Darce starts threads on its own for parallel research, or use /swarm <task>.' }); return }
       const th = all[n - 1]
       if (n && th) {
-        const head = `Thread ${th.id}: ${th.title}\n${th.kind} · ${th.model} · ${th.status} · ${th.steps} steps · ${Math.round(th.ms / 1000)}s · $${th.cost.toFixed(4)}`
+        const head = `Thread ${th.id}: ${th.title}\n${th.kind} · ${th.model} · ${th.status} · ${plural(th.steps, 'step')} · ${Math.round(th.ms / 1000)}s · $${th.cost.toFixed(4)}`
         const log = th.log.length ? `\n\nSteps:\n${th.log.slice(-15).map(l => `  ${l}`).join('\n')}` : ''
         commit({ kind: 'system', id: newId(), text: `${head}${log}\n\nReport:\n${th.report || th.error || '(none)'}` })
         return
       }
       const icon = (s: Thread['status']) => (s === 'done' ? '✓' : s === 'error' ? '✗' : s === 'stopped' ? '■' : '…')
-      commit({ kind: 'system', id: newId(), text: `Threads this session\n${all.map(t => `  ${String(t.id).padStart(2)} ${icon(t.status)} ${t.title.padEnd(34).slice(0, 34)} ${t.kind.padEnd(8)} ${t.steps} steps · ${Math.round(t.ms / 1000)}s · $${t.cost.toFixed(4)}`).join('\n')}\n/threads <number> shows a thread's steps and report.` })
+      commit({ kind: 'system', id: newId(), text: `Threads this session\n${all.map(t => `  ${String(t.id).padStart(2)} ${icon(t.status)} ${t.title.padEnd(34).slice(0, 34)} ${t.kind.padEnd(8)} ${plural(t.steps, 'step')} · ${Math.round(t.ms / 1000)}s · $${t.cost.toFixed(4)}`).join('\n')}\n/threads <number> shows a thread's steps and report.` })
       return
     }
     if (result?.startsWith('__TASTE__:')) {
@@ -1329,7 +1370,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
       const lower = input.toLowerCase().slice(0, 1)
       if (lower === 'y') pending.resolve({ allow: true, via: 'approved by you' })
       else if (lower === 'a' && pending.req.trustKey) {
-        addTrust(state.cwd, pending.req.trustKey)
+        const unsaved = addTrust(state.cwd, pending.req.trustKey)
+        if (unsaved) commit({ kind: 'system', id: newId(), text: `Allowed this time, but the rule wasn't saved: ${unsaved}` })
         pending.resolve({ allow: true, via: `always allow "${pending.req.trustKey}"` })
       } else if (lower === 'n') pending.resolve({ allow: false, reason: 'the user denied this action. Ask what they would like instead, or try a safer approach.' })
       else if (key.escape || (key.ctrl && input === 'c')) {

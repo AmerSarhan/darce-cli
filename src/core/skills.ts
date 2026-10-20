@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { closeSync, constants, existsSync, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from 'node:fs'
+import { join, dirname, relative, isAbsolute, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { BUILTIN_SKILLS } from '../skills/builtin.js'
 
@@ -16,7 +16,37 @@ export type Skill = {
   body?: string // built-ins carry their body inline
 }
 
+/**
+ * The start of a regular file: at least `chars` characters when it has them, never the whole of a huge one.
+ * Instruction and skill files come with a repository, so they can be a symlink to /dev/zero (hangs startup)
+ * or to a file elsewhere (leaks it into the prompt). With `root`, the file's real path must stay inside it.
+ */
+export function readTextHead(path: string, chars: number, root?: string): string | null {
+  let fd: number | undefined
+  try {
+    const real = realpathSync(path)
+    if (root) {
+      const rel = relative(realpathSync(root), real)
+      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null
+    }
+    // Non-blocking so a FIFO can't stall the open; fstat then turns it away
+    fd = openSync(real, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
+    if (!fstatSync(fd).isFile()) return null
+    // Four bytes per character at most, plus one so a cut file always comes back longer than `chars`
+    const buf = Buffer.alloc(chars * 4 + 4)
+    let n = 0
+    for (let r; n < buf.length && (r = readSync(fd, buf, n, buf.length - n, null)) > 0;) n += r
+    return buf.toString('utf-8', 0, n)
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) try { closeSync(fd) } catch {}
+  }
+}
+
 function parseFrontmatter(text: string): { meta: Record<string, string>; body: string } {
+  // Editors on Windows save a BOM, which would hide the opening ---
+  text = text.replace(/^\uFEFF/, '')
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
   if (!m) return { meta: {}, body: text }
   const meta: Record<string, string> = {}
@@ -96,7 +126,9 @@ export function discoverSkills(cwd: string): Skill[] {
   for (const [source, root, depth] of sources) {
     for (const file of findSkillFiles(root, depth)) {
       try {
-        const { meta } = parseFrontmatter(readFileSync(file, 'utf-8'))
+        const text = readTextHead(file, 16_000, source === 'project' ? cwd : undefined)
+        if (text === null) continue
+        const { meta } = parseFrontmatter(text)
         const name = (meta.name || dirname(file).split('/').pop() || '').trim()
         if (!name || seen.has(name) || meta['disable-model-invocation'] === 'true') continue
         seen.add(name)
@@ -123,11 +155,17 @@ export function skillIndex(cwd: string): Skill[] {
     .map(s => ({ ...s, description: s.description.length > 160 ? `${s.description.slice(0, 157)}…` : s.description }))
 }
 
+const SKILL_READ_CAP = 60_000
+
 export function loadSkill(cwd: string, name: string): { name: string; body: string; dir?: string } | null {
   const skill = discoverSkills(cwd).find(s => s.name === name) ?? discoverSkills(cwd).find(s => s.name.toLowerCase() === name.toLowerCase())
   if (!skill) return null
   if (skill.body) return { name: skill.name, body: skill.body }
-  const { body } = parseFrontmatter(readFileSync(skill.path!, 'utf-8'))
+  // Enough for the Skill tool's cap plus frontmatter; the tool points the model at Read for the rest
+  const text = readTextHead(skill.path!, SKILL_READ_CAP, skill.source === 'project' ? cwd : undefined)
+  // Deleted or replaced since discovery
+  if (text === null) throw new Error(`couldn't read ${skill.path}`)
+  const { body } = parseFrontmatter(text)
   return { name: skill.name, body, dir: dirname(skill.path!) }
 }
 

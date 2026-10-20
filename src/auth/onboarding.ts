@@ -1,9 +1,12 @@
-import { addAccount } from './accounts.js'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { addAccount, listAccounts, savedApiBase, DEFAULT_API_BASE } from './accounts.js'
 import { browserLogin } from './browserLogin.js'
 import { callApi, failure } from './http.js'
-import { updateGlobalRc } from '../config/config.js'
+import { updateGlobalRc, readSettingsFile } from '../config/config.js'
 
-const API_BASE = process.env.DARCE_API_BASE || 'https://api.darce.dev'
+// Read per call: DARCE_API_BASE can change between calls (tests), and it decides what gets saved
+const apiBase = () => process.env.DARCE_API_BASE || DEFAULT_API_BASE
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const MIN_PASSWORD = 8
 const MAX_ATTEMPTS = 3
@@ -64,7 +67,7 @@ function createPrompter() {
 
 async function callAuth(endpoint: 'login' | 'register', email: string, password: string): Promise<AuthResult> {
   try {
-    const r = await callApi(`${API_BASE}/v1/auth/${endpoint}`, {
+    const r = await callApi(`${apiBase()}/v1/auth/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -79,7 +82,7 @@ async function callAuth(endpoint: 'login' | 'register', email: string, password:
 /** Start a no-account trial: a key with a few requests, claimable later with `darce signup`. */
 async function startTrial(): Promise<{ apiKey: string; limit: number } | { error: string; unreachable?: boolean }> {
   try {
-    const r = await callApi(`${API_BASE}/v1/auth/trial`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    const r = await callApi(`${apiBase()}/v1/auth/trial`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
     if (r.ok && typeof r.data.api_key === 'string') return { apiKey: r.data.api_key, limit: typeof r.data.limit === 'number' ? r.data.limit : 10 }
     return { error: failure(r, "Couldn't start a trial") }
   } catch (err) {
@@ -94,7 +97,7 @@ export async function signupFlow(currentKey?: string): Promise<string | null> {
   let tier = ''
   if (currentKey) {
     try {
-      const r = await callApi(`${API_BASE}/v1/account`, { headers: { Authorization: `Bearer ${currentKey}` } })
+      const r = await callApi(`${apiBase()}/v1/account`, { headers: { Authorization: `Bearer ${currentKey}` } })
       tier = typeof r.data.tier === 'string' ? r.data.tier : ''
     } catch (err) {
       console.log(`\n  ${(err as Error).message}\n`)
@@ -119,7 +122,7 @@ export async function signupFlow(currentKey?: string): Promise<string | null> {
     if (confirm !== password) { console.log("  Passwords don't match. Try again.\n"); continue }
     let r
     try {
-      r = await callApi(`${API_BASE}/v1/auth/claim`, {
+      r = await callApi(`${apiBase()}/v1/auth/claim`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${currentKey}` },
         body: JSON.stringify({ email, password }),
@@ -140,11 +143,41 @@ export async function signupFlow(currentKey?: string): Promise<string | null> {
 }
 
 export function saveCredentials(apiKey: string, email = '') {
-  if (email) { addAccount(email, apiKey, API_BASE); return }
+  if (email) { addAccount(email, apiKey, apiBase()); return }
+  const base = savedApiBase(apiBase())
   updateGlobalRc(rc => {
     rc.apiKey = apiKey
-    rc.apiBase = API_BASE
+    if (base) rc.apiBase = base
+    else delete rc.apiBase
   })
+}
+
+export type LoginFlow = 'trial' | 'browser' | 'signup' | 'signin'
+
+/**
+ * The first-run / `darce login` menu. With a key already saved there's no trial: Enter would otherwise
+ * swap a signed-in account for a trial key, leaving ~/.darcerc and accounts.json disagreeing.
+ */
+export function loginMenu(signedIn: boolean): { flow: LoginFlow; label: string }[] {
+  const menu: { flow: LoginFlow; label: string }[] = [
+    { flow: 'trial', label: 'Try it now                       (free, no account)' },
+    { flow: 'browser', label: 'Sign in with your browser' },
+    { flow: 'signup', label: 'Create a free account here       (daily allowance, no card needed)' },
+    { flow: 'signin', label: 'Sign in here with email and password' },
+  ]
+  return signedIn ? menu.slice(1) : menu
+}
+
+/** The flow for what was typed at the menu (Enter picks the first), or null when it isn't an option. */
+export function pickLoginFlow(input: string, signedIn: boolean): LoginFlow | null {
+  const menu = loginMenu(signedIn)
+  const n = input.trim() === '' ? 1 : Number(input.trim())
+  return Number.isInteger(n) && n >= 1 && n <= menu.length ? menu[n - 1]!.flow : null
+}
+
+function hasSavedKey(): boolean {
+  if (listAccounts().accounts.length) return true
+  try { return !!readSettingsFile(join(homedir(), '.darcerc')).apiKey } catch { return false }
 }
 
 let lastEmail = ''
@@ -232,17 +265,19 @@ export async function onboard(mode: 'choose' | 'signin' = 'choose'): Promise<str
 
   const p = createPrompter()
   try {
-    let choice = mode === 'signin' ? '3' : ''
+    let choice: LoginFlow | null = mode === 'signin' ? 'signin' : null
     if (!choice) {
-      console.log('\n  Welcome to Darce — the coding agent you can undo.\n')
-      console.log('    1) Try it now                       (free, no account)')
-      console.log('    2) Sign in with your browser')
-      console.log('    3) Create a free account here       (daily allowance, no card needed)')
-      console.log('    4) Sign in here with email and password\n')
-      choice = await p.ask('  Choose 1-4 [1]: ')
+      const signedIn = hasSavedKey()
+      const menu = loginMenu(signedIn)
+      console.log(signedIn ? '\n  Sign in to Darce.\n' : '\n  Welcome to Darce — the coding agent you can undo.\n')
+      menu.forEach((m, i) => console.log(`    ${i + 1}) ${m.label}`))
       console.log()
-      // Menu numbers shifted when the trial was added; map back to the flows below
-      choice = choice === '' || choice === '1' ? 'trial' : String(Number(choice) - 1)
+      for (let i = 0; i < MAX_ATTEMPTS && !choice; i++) {
+        choice = pickLoginFlow(await p.ask(`  Choose 1-${menu.length} [1]: `), signedIn)
+        if (!choice) console.log(`  Choose 1-${menu.length}.\n`)
+      }
+      if (!choice) return null
+      console.log()
     }
 
     let apiKey: string | null = null
@@ -257,9 +292,9 @@ export async function onboard(mode: 'choose' | 'signin' = 'choose'): Promise<str
       // Unreachable means the browser sign-in would only sit waiting too
       if (t.unreachable) { console.log(`  ${t.error}\n`); return null }
       console.log(`  ${t.error} Let's sign in with your browser instead.\n`)
-      choice = '1'
+      choice = 'browser'
     }
-    if (choice === '1') {
+    if (choice === 'browser') {
       console.log('  Opening darce.dev in your browser…')
       try {
         const r = await browserLogin({ onUrl: url => console.log(`  If it didn't open, visit:\n  ${url}\n\n  Waiting for you to sign in (Ctrl+C to cancel)…`) })
@@ -268,13 +303,13 @@ export async function onboard(mode: 'choose' | 'signin' = 'choose'): Promise<str
         console.log(`\n  Signed in as ${email}.\n`)
       } catch (err) {
         console.log(`\n  ${(err as Error).message} Falling back to signing in here.\n`)
-        choice = '3'
+        choice = 'signin'
       }
     }
-    if (!apiKey && choice === '3') {
+    if (!apiKey && choice === 'signin') {
       const r = await signIn(p)
       apiKey = r
-    } else if (!apiKey && choice === '2') {
+    } else if (!apiKey && choice === 'signup') {
       const result = await signUp(p)
       apiKey = typeof result === 'object' && result ? await signIn(p, result.signinEmail) : result
     }

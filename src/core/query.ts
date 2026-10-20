@@ -200,6 +200,12 @@ export async function* query(params: QueryParams): AsyncGenerator<StreamEvent, Q
         const changes = !getTool(block.name)?.isReadOnly
         // Snapshot hooks are best effort: a failed snapshot must not fail the tool
         if (changes) try { await params.beforeChange?.(call) } catch (err) { debug('beforeChange failed', err) }
+        // Esc during the snapshot must still stop a Write or Edit; the after-snapshot closes the step as a no-op
+        if (params.abortSignal?.aborted) {
+          if (changes) try { await params.afterChange?.(call) } catch (err) { debug('afterChange failed', err) }
+          yield finish(block, { result: 'Not run: the user interrupted.', isError: true }, Date.now())
+          continue
+        }
         yield { type: 'tool_executing', id: block.id, name: block.name, input: block.input, via }
         const started = Date.now()
         const executed = await executeTool(block)

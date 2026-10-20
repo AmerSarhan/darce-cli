@@ -11,6 +11,7 @@ import { PlanPanel } from './PlanPanel.js'
 import { Welcome } from './Welcome.js'
 import { Receipt, type ReceiptData } from './Receipt.js'
 import { TasteView } from './TasteView.js'
+import { plural } from '../utils/plural.js'
 
 // Everything that has happened in the session. Committed items are printed
 // once via <Static> and never re-rendered.
@@ -72,8 +73,8 @@ function resultHeadline(item: Extract<TranscriptItem, { kind: 'tool' }>): string
   }
   switch (item.name) {
     case 'Read': return `${Math.max(0, item.result.split('\n').length)} lines`
-    case 'Glob': return item.result.startsWith('No ') ? 'no matches' : `${lines.length} files`
-    case 'Grep': return lines.length === 0 || /no matches/i.test(item.result) ? 'no matches' : `${lines.length} matches`
+    case 'Glob': return item.result.startsWith('No ') ? 'no matches' : plural(lines.length, 'file')
+    case 'Grep': return lines.length === 0 || /no matches/i.test(item.result) ? 'no matches' : plural(lines.length, 'match', 'matches')
     default: return ''
   }
 }

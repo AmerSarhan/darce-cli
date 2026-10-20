@@ -1,7 +1,7 @@
-import { readFileSync, existsSync, statSync } from 'node:fs'
-import { resolve, relative, isAbsolute } from 'node:path'
+import { resolve } from 'node:path'
 import { parse } from 'shell-quote'
 import { bashRisk, unwrap, WRAPPERS, type Risk } from './risk.js'
+import { readTextHead } from './skills.js'
 import { trace } from '../utils/logger.js'
 
 /**
@@ -19,19 +19,9 @@ const CODE_RUNNERS = new Set(['node', 'nodejs', 'tsx', 'ts-node', 'python', 'pyt
 const THRESHOLD = 0.3
 const cache = new Map<string, Risk | null>()
 
-function inside(path: string, cwd: string): boolean {
-  const rel = relative(cwd, resolve(cwd, path))
-  return !rel.startsWith('..') && !isAbsolute(rel)
-}
-
-function readHead(path: string, cwd: string, max = 4000): string | undefined {
-  try {
-    const abs = resolve(cwd, path)
-    if (!inside(abs, cwd) || !existsSync(abs) || !statSync(abs).isFile()) return undefined
-    return readFileSync(abs, 'utf-8').slice(0, max)
-  } catch {
-    return undefined
-  }
+/** The start of a project file the command runs; it goes to Jev, so nothing from outside the project. */
+function readHead(path: string, dir: string, cwd: string, max = 4000): string | undefined {
+  return readTextHead(resolve(dir, path), max, cwd)?.slice(0, max)
 }
 
 /** Each simple command in a line (`cd x && npm run sync; echo $?` → three), VAR=value prefixes dropped. */
@@ -57,19 +47,32 @@ function commands(command: string): string[][] {
 
 const firstCommand = (command: string): string[] | null => commands(command)[0] ?? null
 
-/** The part of a line that runs code, e.g. `npm run sync` in `cd app && npm run sync; echo $?`. */
-function codePart(command: string): string[] | undefined {
-  return commands(command).find(w => { const c = w[0]!.split('/').pop()!; return RUNNERS.has(c) || CODE_RUNNERS.has(c) || w[0]!.startsWith('./') })
+const runsCode = (w: string[]) => { const c = w[0]!.split('/').pop()!; return RUNNERS.has(c) || CODE_RUNNERS.has(c) || w[0]!.startsWith('./') }
+
+/** The part of a line that runs code, e.g. `npm run sync` in `cd app && npm run sync; echo $?`,
+ *  and the directory it runs in: in a monorepo `cd web && npm run build` runs web/package.json's script. */
+function codePart(command: string, cwd: string): { words: string[]; dir: string } | undefined {
+  let dir = cwd
+  for (const w of commands(command)) {
+    if (runsCode(w)) return { words: w, dir }
+    if (w[0] === 'cd' || w[0] === 'pushd') {
+      const target = w.slice(1).find(a => !a.startsWith('-'))
+      const home = process.env.HOME ?? cwd
+      dir = !target ? home : target === '-' ? dir : resolve(dir, target.replace(/^~(?=$|\/)/, home))
+    }
+  }
+  return undefined
 }
 
 /** The package.json script a runner command executes, if any. */
-function packageScript(words: string[], cwd: string): { name: string; text: string } | undefined {
+function packageScript(words: string[], dir: string): { name: string; text: string } | undefined {
   const [cmd, sub, name] = words
   if (!cmd || !RUNNERS.has(cmd)) return undefined
   const scriptName = sub === 'run' || sub === 'run-script' ? name : sub
   if (!scriptName || scriptName.startsWith('-')) return undefined
   try {
-    const scripts = JSON.parse(readFileSync(resolve(cwd, 'package.json'), 'utf-8')).scripts ?? {}
+    // Bounded: any package.json could be a symlink to /dev/zero
+    const scripts = JSON.parse(readTextHead(resolve(dir, 'package.json'), 256_000) ?? '').scripts ?? {}
     const text = scripts[scriptName]
     return typeof text === 'string' ? { name: scriptName, text } : undefined
   } catch {
@@ -87,20 +90,25 @@ function scriptFile(words: string[]): string | undefined {
 }
 
 export function wantsSecondOpinion(command: string): boolean {
-  return !!codePart(command)
+  return commands(command).some(runsCode)
 }
 
 export async function secondOpinion(command: string, cwd: string, apiKey: string, apiBase = 'https://api.darce.dev'): Promise<Risk | null> {
-  const key = `${cwd}\0${command}`
-  if (cache.has(key)) return cache.get(key)!
   // Models usually prefix `cd <dir> &&`; judge the part that actually runs code
-  const words = codePart(command)
-  if (!words) return null
+  const part = codePart(command, cwd)
+  if (!part) return null
+  const { words, dir } = part
+  const pkg = packageScript(words, dir)
+  const innerWords = pkg ? firstCommand(pkg.text) : null
+  const file = scriptFile(words) ?? (innerWords ? scriptFile(innerWords) : undefined)
+  const source = file ? readHead(file, dir, cwd) : undefined
+  // The verdict is about what runs, not the command line: an edited script or file must be judged again
+  const key = [cwd, command, dir, pkg?.text ?? '', source ?? ''].join('\0')
+  if (cache.has(key)) return cache.get(key)!
 
   // 1. The script's real command, scored by the rules
-  const pkg = packageScript(words, cwd)
   if (pkg) {
-    const inner = bashRisk(pkg.text, cwd)
+    const inner = bashRisk(pkg.text, dir)
     if (inner.level >= 2) {
       const r: Risk = { level: inner.level, reason: `"${pkg.name}" runs \`${pkg.text.slice(0, 60)}\`: ${inner.reason}` }
       cache.set(key, r)
@@ -109,9 +117,6 @@ export async function secondOpinion(command: string, cwd: string, apiKey: string
   }
 
   // 2. Jev, with the script line and the start of the file that will run
-  const innerWords = pkg ? firstCommand(pkg.text) : null
-  const file = scriptFile(words) ?? (innerWords ? scriptFile(innerWords) : undefined)
-  const source = file ? readHead(file, cwd) : undefined
   // Jev runs on Darce's API; with your own OpenRouter key there's nothing to ask, and the script shouldn't go elsewhere
   if (!/(^|\.)darce\.dev(\/|:|$)/.test(apiBase.replace(/^https?:\/\//, ''))) return null
   const started = Date.now()
