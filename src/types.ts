@@ -50,7 +50,7 @@ export type StreamEvent =
   | { type: 'message_complete'; message: Message; usage: TokenUsage }
   | { type: 'tool_executing'; id: string; name: string; input: Record<string, unknown>; via?: string }
   | { type: 'tool_result_ready'; id: string; name: string; result: string; isError?: boolean; durationMs: number; display?: ToolDisplay; denied?: boolean; redacted?: number }
-  | { type: 'error'; error: string }
+  | { type: 'error'; error: string; upgrade?: 'builder' | 'power' }
 
 export type SpinnerMode = 'idle' | 'requesting' | 'thinking' | 'responding' | 'tool-input' | 'tool-use'
 

@@ -891,6 +891,7 @@ async function runTests() {
   await testTools0180(test)
   await testProvider0180(test)
   await testState0180(test)
+  await testRelease0190()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -2395,4 +2396,53 @@ async function testRelease0180() {
     closeSync(fd)
     return r?.text.length === STDIN_LIMIT && r.truncated
   })
+}
+
+async function testRelease0190() {
+  const http = await import('node:http')
+  const { OpenRouterProvider } = await import('./src/providers/openrouter.js')
+  const replies: Record<string, [number, unknown]> = {
+    allowance: [429, { error: 'Rate limit exceeded', message: "You've used today's free allowance. It resets in about 7 h.", remaining: 0, upgrade: 'builder' }],
+    trialOut: [429, { error: 'Rate limit exceeded', message: "That's the end of the trial.", remaining: 0 }],
+    gated: [403, { error: 'Model not in plan', message: "x/y isn't included in your plan. Pick another model with /model.", upgrade: 'power' }],
+    upstream401: [401, { error: { message: 'User not found.', code: 401 } }],
+    badKey: [401, { error: 'Unauthorized', message: 'Invalid or missing API key' }],
+  }
+  const server = http.createServer((req, res) => {
+    req.resume()
+    const name = (req.url ?? '').split('/')[1] ?? ''
+    const r = Object.hasOwn(replies, name) ? replies[name] : undefined
+    res.writeHead(r ? r[0] : 404, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(r ? r[1] : {}))
+  })
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+  const port = (server.address() as { port: number }).port
+  const firstError = async (name: string) => {
+    for await (const e of new OpenRouterProvider('k', `http://127.0.0.1:${port}/${name}`).stream([{ role: 'user', content: 'hi' }], 'm/x', [])) if (e.type === 'error') return e
+    return null
+  }
+  const { planNeeded } = await import('./src/config/models.js')
+  await test('Models: the picker marks models above the plan with the plan that includes them', () => {
+    const m = (perM: number) => ({ costPer1kOutput: perM / 1000 }) as Parameters<typeof planNeeded>[0]
+    return planNeeded(m(4), 'free') === null && planNeeded(m(15), 'free') === 'Builder' && planNeeded(m(25), 'free') === 'Power'
+      && planNeeded(m(15), 'builder') === null && planNeeded(m(25), 'builder') === 'Power'
+      && planNeeded(m(75), 'power') === null && planNeeded(m(75), undefined) === null && planNeeded(m(15), 'trial') === 'Builder'
+  })
+  try {
+    await test('Upgrade: running out of allowance names the plan to offer; a trial gets no offer', async () => {
+      const a = await firstError('allowance'), t = await firstError('trialOut')
+      return a?.type === 'error' && a.upgrade === 'builder' && a.error.includes('resets in about 7 h') && t?.type === 'error' && t.upgrade === undefined
+    })
+    await test('Upgrade: a model above the plan names the plan that includes it', async () => {
+      const e = await firstError('gated')
+      return e?.type === 'error' && e.upgrade === 'power' && e.error.includes('/model')
+    })
+    await test('Errors: a 401 from the model provider says it is on Darce\'s side; a bad Darce key still says so', async () => {
+      const up = await firstError('upstream401'), bad = await firstError('badKey')
+      return up?.type === 'error' && /Darce's side, not your account/.test(up.error) && !up.error.includes('User not found')
+        && bad?.type === 'error' && bad.error.includes('Invalid or missing API key')
+    })
+  } finally {
+    server.close()
+  }
 }

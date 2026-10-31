@@ -2,6 +2,13 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.19.0
+
+- **Upgrading takes one key.** When today's free allowance runs out, or you pick a model your plan doesn't include, Darce shows what the next plan adds and its price. Press `u` to open Stripe checkout, already signed in, or `m` to pick another model. Before, you got an error and a link to the website, where you had to sign in again.
+- **Darce notices when you've upgraded.** After checkout opens, the new plan shows up in the session as soon as the payment goes through, with no restart. `/upgrade` works the same way.
+- **The model picker shows which plan a model needs.** Models above your plan are marked Builder or Power, so you know before you pick one.
+- **Clearer errors when the problem is on Darce's side.** A failure behind Darce's servers used to show as "API error 401: User not found", which looked like your account was gone. It now says the problem is on Darce's side and to try again in a minute.
+
 ## 0.18.0
 
 Stability. Four parts of Darce were audited this time (the streaming client, saved sessions and settings, the less-used tools, and the command line), and this release fixes what turned up.

@@ -212,8 +212,20 @@ export class OpenRouterProvider implements Provider {
         }
 
         if (!response.ok) {
-          const message = errorBodyMessage(await response.text())
-          yield { type: 'error', error: (response.status === 403 || response.status === 429) && message ? message : `API error ${response.status}${message ? `: ${message}` : ''}` }
+          const text = await response.text()
+          const message = errorBodyMessage(text)
+          // The API names the plan that would fix this (out of allowance, model above the plan), so the app can offer it
+          let upgrade: 'builder' | 'power' | undefined
+          try { const u = JSON.parse(text).upgrade; if (u === 'builder' || u === 'power') upgrade = u } catch {}
+          // Darce's own 401 is a bad key. Any other 401 came from the model provider behind it, which reads like
+          // your account was deleted ("User not found") when it's a problem on Darce's side
+          const providerSide = response.status === 401 && !/invalid or missing api key/i.test(message)
+          const error = providerSide
+            ? "Darce couldn't reach its model provider. That's a problem on Darce's side, not your account. Try again in a minute."
+            : response.status >= 500
+              ? `Darce's servers had a problem (${response.status}). Try again in a minute.`
+              : (response.status === 403 || response.status === 429) && message ? message : `API error ${response.status}${message ? `: ${message}` : ''}`
+          yield { type: 'error', error, ...(upgrade ? { upgrade } : {}) }
           return
         }
 

@@ -310,6 +310,17 @@ export function vendorOf(id: string): string {
 }
 
 /** Price level by output cost per million tokens. */
+// Output price ceilings per plan, $ per million tokens (the API's policy.ts is the source of truth; this is the hint)
+const PLAN_CEILING: Record<string, number> = { trial: 5, free: 5, builder: 20 }
+
+/** The plan a model needs beyond the user's own, or null when their plan includes it (or the plan is unknown). */
+export function planNeeded(m: ModelProfile, tier?: string): 'Builder' | 'Power' | null {
+  const ceiling = tier ? PLAN_CEILING[tier] : undefined
+  const perM = m.costPer1kOutput * 1000
+  if (ceiling === undefined || perM <= ceiling) return null
+  return perM <= PLAN_CEILING.builder! ? 'Builder' : 'Power'
+}
+
 export function priceLevel(m: ModelProfile): string {
   const perM = m.costPer1kOutput * 1000
   if (perM === 0) return 'free'

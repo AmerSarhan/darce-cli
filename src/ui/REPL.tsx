@@ -35,6 +35,7 @@ import { setTitle, setProgress, notify } from './termfx.js'
 import type { PermissionMode, ToolDisplay } from '../types.js'
 import { resolve as resolvePath, isAbsolute, relative } from 'node:path'
 import { Receipt, type ReceiptData } from './Receipt.js'
+import { UpgradeOffer, PLAN_PITCH, type UpgradePlan } from './UpgradeOffer.js'
 import { Tape } from './Tape.js'
 import { DerbyBoard } from './DerbyBoard.js'
 import { PlanPanel } from './PlanPanel.js'
@@ -319,6 +320,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     const timer = setTimeout(finish, 1200)
     fetchAccount(state.config.apiKey, state.config.apiBase || undefined).then(info => {
       if (info) {
+        setTier(info.tier)
         const plan = info.tier === 'free' ? 'Free' : info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
         const left = ` · ${describeUsage(info)}`
         // DARCE_DEMO=1 keeps your email out of screen recordings
@@ -366,6 +368,39 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
   }, [commit, setState, provider, state.cwd])
   const persistRef = useRef(persist)
   persistRef.current = persist
+
+  // Upgrading: checkout opens in the browser, and the plan change shows up here the moment it goes through
+  const [offer, setOffer] = useState<UpgradePlan | null>(null)
+  const [tier, setTier] = useState<string | null>(null)
+  const upgradeWatch = useRef<ReturnType<typeof setInterval> | null>(null)
+  useEffect(() => () => { if (upgradeWatch.current) clearInterval(upgradeWatch.current) }, [])
+  const startUpgrade = useCallback(async (plan?: UpgradePlan) => {
+    const { apiKey, apiBase } = state.config
+    commit({ kind: 'system', id: newId(), text: 'Creating a secure Stripe checkout…' })
+    const [before, r] = await Promise.all([fetchAccount(apiKey, apiBase || undefined), createCheckout(apiKey, apiBase || undefined, plan)])
+    if (!('url' in r)) {
+      commit({ kind: r.alreadyPaid ? 'system' : 'error', id: newId(), text: r.alreadyPaid ? "You're already on a paid plan." : r.error })
+      return
+    }
+    openInBrowser(r.url)
+    commit({ kind: 'system', id: newId(), text: `Opened checkout in your browser. If it didn't open:\n${r.url}\nDarce will pick up the new plan here as soon as the payment goes through.` })
+    if (upgradeWatch.current) clearInterval(upgradeWatch.current)
+    const from = before?.tier
+    const until = Date.now() + 20 * 60_000
+    upgradeWatch.current = setInterval(() => {
+      if (Date.now() > until) { clearInterval(upgradeWatch.current!); upgradeWatch.current = null; return }
+      void fetchAccount(apiKey, apiBase || undefined).then(info => {
+        if (!info || !from || info.tier === from || !(info.tier in PLAN_PITCH)) return
+        clearInterval(upgradeWatch.current!)
+        upgradeWatch.current = null
+        const p = PLAN_PITCH[info.tier as UpgradePlan]
+        setTier(info.tier)
+        if (!process.env.DARCE_DEMO) accountLine.current = `${info.email} · ${p.name} · ${describeUsage(info)}`
+        commit({ kind: 'system', id: newId(), text: `You're on ${p.name} now: ${p.adds}. Thank you for backing Darce. Shift+Up shifts to a bigger model.` })
+        notify('Darce', `You're on ${p.name} now`)
+      })
+    }, 5000)
+  }, [commit, state.config])
 
   useEffect(() => {
     if (state.modelOverride) modelRef.current = state.modelOverride
@@ -709,6 +744,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           case 'error':
             flush(true)
             commit({ kind: 'error', id: newId(), text: event.error })
+            if (event.upgrade) setOffer(event.upgrade)
             brain.emit('error', { message: event.error.slice(0, 400) })
             if (voice && !spoke.error) { spoke.error = true; voice.say('error', voiceContext(`It stopped with this error: ${event.error.slice(0, 300)}`)) }
             break
@@ -1170,17 +1206,8 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     }
     if (result?.startsWith('__UPGRADE__:')) {
       const arg = result.slice(12)
-      const plan = arg === 'builder' || arg === 'power' ? arg : undefined
       commit({ kind: 'user', id: newId(), text })
-      commit({ kind: 'system', id: newId(), text: 'Creating a secure Stripe checkout…' })
-      void createCheckout(state.config.apiKey, state.config.apiBase || undefined, plan).then(r => {
-        if ('url' in r) {
-          openInBrowser(r.url)
-          commit({ kind: 'system', id: newId(), text: `Opened checkout in your browser. If it didn't open:\n${r.url}` })
-        } else {
-          commit({ kind: r.alreadyPaid ? 'system' : 'error', id: newId(), text: r.alreadyPaid ? "You're already on a paid plan." : r.error })
-        }
-      })
+      void startUpgrade(arg === 'builder' || arg === 'power' ? arg : undefined)
       return
     }
     if (result?.startsWith('__DERBY__:')) { void startDerby(result.slice(10)); return }
@@ -1269,7 +1296,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
     if (/^\/compact\b/.test(text)) return
     commit({ kind: 'user', id: newId(), text })
     if (result) commit({ kind: 'system', id: newId(), text: result })
-  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, state.config.suggestModel, setState, exit, clearScreen, commit, openTape, startDerby, startSwarm, busy, criticOn, learnOn, suggestOn, runQuery])
+  }, [state.currentModel, state.cwd, state.mode, state.config.criticModel, state.config.suggestModel, setState, exit, clearScreen, commit, openTape, startDerby, startSwarm, busy, criticOn, learnOn, suggestOn, runQuery, startUpgrade])
 
   // Run queued messages one after another
   useEffect(() => {
@@ -1364,6 +1391,14 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         dispatch({ type: 'replace', start, end, text: `${item.value} ` })
         return
       }
+    }
+    if (offer && !busy && !pending) {
+      const k = input.toLowerCase().slice(0, 1)
+      setOffer(null)
+      if (k === 'u') { void startUpgrade(offer); return }
+      if (k === 'm') { setShowPicker(true); return }
+      // Esc closes it; any other key goes back to typing, keeping that key
+      if (key.escape) return
     }
     if (pending) {
       // First key only: "y" and a stray second key can arrive together
@@ -1556,6 +1591,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         ) : null}
 
         {pending ? <PermissionPrompt req={pending.req} /> : null}
+        {offer && !busy && !pending ? <UpgradeOffer plan={offer} /> : null}
         {tape ? (
           <Tape
             frames={checkpointsRef.current!.list().map(c => ({ label: c.label, at: c.at }))}
@@ -1572,6 +1608,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
         {showPicker && (
           <ModelPicker
             currentModel={state.currentModel}
+            tier={tier ?? undefined}
             onSelect={handleModelSelect}
             onClose={() => setShowPicker(false)}
           />
@@ -1586,7 +1623,7 @@ export function REPL({ provider, initialPrompt, restored }: Props) {
           />
         )}
 
-        <Prompt editor={editor} busy={busy} dimmed={showPicker || showSessions || !!pending || !!tape || !!derby} suggestion={suggestion} placeholder={derby ? `The ${derby.variant === 'swarm' ? 'swarm' : 'race'} board above has the keys` : undefined} />
+        <Prompt editor={editor} busy={busy} dimmed={showPicker || showSessions || !!pending || !!tape || !!derby || (!!offer && !busy)} suggestion={suggestion} placeholder={derby ? `The ${derby.variant === 'swarm' ? 'swarm' : 'race'} board above has the keys` : undefined} />
         {attachments.filter(a => editor.text.includes(`[Image #${a.n}]`)).map(a => (
           <Text key={a.n} color={t.faint}>
             {'  '}<Text color={t.accent}>▣</Text> Image #{a.n}  {a.name}{a.width ? `  ${a.width}×${a.height}` : ''}  {Math.round(a.bytes / 1024)} KB

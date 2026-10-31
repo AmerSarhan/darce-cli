@@ -1,12 +1,14 @@
 import React, { useMemo, useState } from 'react'
 import { Box, Text, useInput } from 'ink'
-import { getModels, getModelProfile, popularModels, recentModels, displayName, vendorOf, priceLevel } from '../config/models.js'
+import { getModels, getModelProfile, popularModels, recentModels, displayName, vendorOf, priceLevel, planNeeded } from '../config/models.js'
 import { rank } from './input/complete.js'
 import { theme } from './theme.js'
 import type { ModelProfile } from '../types.js'
 
 type Props = {
   currentModel: string
+  /** The account's plan, to mark models it doesn't include */
+  tier?: string
   onSelect: (model: string) => void
   onClose: () => void
 }
@@ -36,7 +38,7 @@ function browseRows(all: ModelProfile[]): Row[] {
   return rows
 }
 
-export function ModelPicker({ currentModel, onSelect, onClose }: Props) {
+export function ModelPicker({ currentModel, tier, onSelect, onClose }: Props) {
   const t = theme()
   const [query, setQuery] = useState('')
   const all = getModels()
@@ -98,6 +100,7 @@ export function ModelPicker({ currentModel, onSelect, onClose }: Props) {
           const active = top + i === rowIndex
           const current = m.id === currentModel
           const tags = m.strengths.filter(s => s === 'vision' || s === 'reasoning').join(', ')
+          const needs = planNeeded(m, tier)
           return (
             <Box key={m.id}>
               <Box width={34}>
@@ -109,6 +112,7 @@ export function ModelPicker({ currentModel, onSelect, onClose }: Props) {
               <Box width={6}><Text color={priceLevel(m) === 'free' ? t.success : t.muted}>{priceLevel(m)}</Text></Box>
               <Box width={7}><Text color={t.faint}>{formatContext(m.contextWindow)}</Text></Box>
               <Text color={t.faint} wrap="truncate-end">{tags}</Text>
+              {needs ? <Text color={t.accent}>  {needs}</Text> : null}
               {current ? <Text color={t.success}>  ● current</Text> : null}
             </Box>
           )
