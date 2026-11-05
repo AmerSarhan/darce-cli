@@ -2,6 +2,11 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.19.1
+
+- **The second opinion on scripts works again.** Before Darce runs a script on its own (like `npm run deploy`), it asks whether the script changes anything outside your computer. That check had been failing on Darce's side, so every script fell back to the local rules alone. It's fixed on the server for every version, answers in about a second, and Darce now waits up to 4 seconds for it instead of 2.
+- **Closing the terminal mid-session is a normal exit.** If the window closed, an ssh connection dropped or the laptop slept with Darce open, Darce logged a crash and tried to print an error nobody could see. It now exits quietly. Your conversation up to the last step is saved, as always.
+
 ## 0.19.0
 
 - **Upgrading takes one key.** When today's free allowance runs out, or you pick a model your plan doesn't include, Darce shows what the next plan adds and its price. Press `u` to open Stripe checkout, already signed in, or `m` to pick another model. Before, you got an error and a link to the website, where you had to sign in again.

@@ -892,6 +892,7 @@ async function runTests() {
   await testProvider0180(test)
   await testState0180(test)
   await testRelease0190()
+  await testRelease0191()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -2445,4 +2446,13 @@ async function testRelease0190() {
   } finally {
     server.close()
   }
+}
+
+async function testRelease0191() {
+  const { isTerminalGone } = await import('./src/utils/terminal-gone.js')
+  const err = (code: string, syscall?: string, message = `${syscall ?? 'read'} ${code}`) => Object.assign(new Error(message), { code, syscall })
+  await test('Safety net: a closed terminal (EIO/EPIPE on write) is a quiet exit, not a crash', async () =>
+    isTerminalGone(err('EIO', 'write')) && isTerminalGone(err('EPIPE', 'write')) && isTerminalGone(err('ENXIO', undefined, 'write ENXIO')))
+  await test('Safety net: other errors still count as crashes', async () =>
+    !isTerminalGone(err('EIO', 'read')) && !isTerminalGone(err('ENOENT', 'open')) && !isTerminalGone(new Error('boom')) && !isTerminalGone(undefined))
 }

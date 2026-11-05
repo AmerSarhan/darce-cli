@@ -125,7 +125,7 @@ export async function secondOpinion(command: string, cwd: string, apiKey: string
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ command, script: pkg?.text, source }),
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(4000),
     })
     const data = (await res.json().catch(() => ({}))) as { outside?: number }
     trace('risk_check', { ms: Date.now() - started, status: res.status, outside: data.outside })

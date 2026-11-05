@@ -104,9 +104,16 @@ async function exitIfRcBroken(hasKey = false) {
 async function installSafetyNet() {
   const { trace, TRACE_PATH } = await import('../utils/logger.js')
   const { redactSecrets } = await import('../utils/redact.js')
+  const { isTerminalGone } = await import('../utils/terminal-gone.js')
   const describe = (e: unknown) => redactSecrets(e instanceof Error ? `${e.stack ?? e.message}` : String(e)).text.slice(0, 2000)
   process.on('unhandledRejection', reason => trace('unhandled_rejection', { error: describe(reason) }))
   process.on('uncaughtException', err => {
+    // The terminal went away under a running session (window closed, ssh dropped, laptop slept): drawing the
+    // next frame fails with EIO. Nobody is left to read an error, so leave quietly. Saved sessions are on disk.
+    if (isTerminalGone(err)) {
+      trace('terminal_gone', { code: (err as NodeJS.ErrnoException).code })
+      process.exit(0)
+    }
     trace('uncaught_exception', { error: describe(err) })
     try { if (process.stdin.isTTY) process.stdin.setRawMode(false) } catch { /* stdin already gone */ }
     // Show the cursor, end bracketed paste, pop the kitty keyboard mode Ink pushed
