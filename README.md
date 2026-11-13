@@ -42,7 +42,7 @@
 npx darce-cli
 ```
 
-That's it. No account, no API key, no card: the first run gives you a free trial straight away. Run `darce signup` when you want a free account with a daily allowance and your history kept. Needs Node.js 22+ on macOS, Linux or Windows.
+That's it. No account, no API key, no card: the first run gives you a free trial straight away. Run `darce signup` when you want a free account: your first week is on Builder, then a daily allowance, and your history is kept. Needs Node.js 22+ on macOS, Linux or Windows.
 
 To install it for good: `npm install -g darce-cli`, then run `darce` in any project.
 
@@ -114,7 +114,7 @@ Checked October 2026. The full, sourced comparison of 12 agents is at [darce.dev
 | **Usage** | Daily allowance, resets every 24 hours | About 7× Free, resets weekly | About 4× Builder, resets weekly |
 | **Models** | Fast, low-cost models (Haiku, Qwen, DeepSeek, Gemini Flash…) | Adds Claude Sonnet and Opus, GPT, Gemini Pro | Every model |
 
-Usage is measured by what the work actually costs, so fast models go much further. Every plan gets every feature, there are no surprise bills, and you can cancel any time. Upgrade with `/upgrade` or at [darce.dev/pricing](https://darce.dev/pricing).
+New accounts get their first 7 days on Builder for free, with no card, and then move to Free unless you upgrade. Usage is measured by what the work actually costs, so fast models go much further. Every plan gets every feature, there are no surprise bills, and you can cancel any time. Upgrade with `/upgrade` or at [darce.dev/pricing](https://darce.dev/pricing).
 
 ### Use your own OpenRouter key
 

@@ -11,7 +11,13 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const MIN_PASSWORD = 8
 const MAX_ATTEMPTS = 3
 
-type AuthResult = { ok: true; apiKey: string } | { ok: false; status: number; message: string }
+type AuthResult = { ok: true; apiKey: string; planMessage?: string } | { ok: false; status: number; message: string }
+
+/** The server's one line about the plan a new account starts on ("You're on Builder free until …"). Bounded and single-line. */
+export function planMessage(data: Record<string, unknown>): string | undefined {
+  const m = data.plan_message
+  return typeof m === 'string' && m.trim() ? m.replace(/\s+/g, ' ').trim().slice(0, 240) : undefined
+}
 
 // Minimal raw-mode line reader. Avoids node:readline, which leaves a keypress
 // listener on stdin that fights with Ink once the REPL starts.
@@ -72,7 +78,7 @@ async function callAuth(endpoint: 'login' | 'register', email: string, password:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     })
-    if (r.ok && typeof r.data.api_key === 'string') return { ok: true, apiKey: r.data.api_key }
+    if (r.ok && typeof r.data.api_key === 'string') return { ok: true, apiKey: r.data.api_key, planMessage: planMessage(r.data) }
     return { ok: false, status: r.status, message: failure(r) }
   } catch (err) {
     return { ok: false, status: 0, message: (err as Error).message }
@@ -112,7 +118,7 @@ export async function signupFlow(currentKey?: string): Promise<string | null> {
     return apiKey
   }
 
-  console.log('\n  Create your free account (a daily allowance, no card). Your trial and its history carry over.\n')
+  console.log('\n  Create your free account: a week of Builder, then a daily allowance. No card. Your trial and its history carry over.\n')
   const email = await askEmail(p.ask)
   if (!email) return null
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
@@ -133,7 +139,7 @@ export async function signupFlow(currentKey?: string): Promise<string | null> {
     }
     if (r.ok && typeof r.data.api_key === 'string') {
       saveCredentials(r.data.api_key, email)
-      console.log(`  Done: ${email} is on the Free plan. Carry on with \`darce --resume\`.\n`)
+      console.log(`  Done: ${email} has an account. ${planMessage(r.data) ?? "You're on the Free plan."} Carry on with \`darce --resume\`.\n`)
       return r.data.api_key
     }
     console.log(`  ${failure(r, 'Sign-up failed')}\n`)
@@ -162,7 +168,7 @@ export function loginMenu(signedIn: boolean): { flow: LoginFlow; label: string }
   const menu: { flow: LoginFlow; label: string }[] = [
     { flow: 'trial', label: 'Try it now                       (free, no account)' },
     { flow: 'browser', label: 'Sign in with your browser' },
-    { flow: 'signup', label: 'Create a free account here       (daily allowance, no card needed)' },
+    { flow: 'signup', label: 'Create a free account here       (a week of Builder free, no card)' },
     { flow: 'signin', label: 'Sign in here with email and password' },
   ]
   return signedIn ? menu.slice(1) : menu
@@ -210,7 +216,7 @@ async function signUp(p: ReturnType<typeof createPrompter>): Promise<string | { 
     console.log('\n  Creating your account...')
     const result = await callAuth('register', email, password)
     if (result.ok) {
-      console.log('  Account created — you\'re on the Free plan.\n')
+      console.log(`  Account created. ${result.planMessage ?? "You're on the Free plan."}\n`)
       return result.apiKey
     }
     if (result.status === 409 || /exist|already|taken|registered/i.test(result.message)) {

@@ -100,7 +100,16 @@ export function removeAccount(email?: string): { removed?: string; nowActive?: A
 }
 
 export type Usage = { used_pct: number; window: 'day' | 'week' | null; resets_at: string | null; unlimited: boolean }
-export type AccountInfo = { email: string; tier: string; daily_requests: number; daily_limit: number | string; usage?: Usage }
+export type AccountInfo = { email: string; tier: string; daily_requests: number; daily_limit: number | string; usage?: Usage; trial_ends_at?: string | null }
+
+/** "Free", "Power", or "Builder trial until Nov 20" while a dated plan (the new-account trial, a beta code) runs. */
+export function planLabel(info: Pick<AccountInfo, 'tier' | 'trial_ends_at'>): string {
+  const name = info.tier.charAt(0).toUpperCase() + info.tier.slice(1)
+  if (!info.trial_ends_at) return name
+  const ends = new Date(info.trial_ends_at)
+  if (Number.isNaN(ends.getTime())) return name
+  return `${name} trial until ${ends.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+}
 
 /** "12% of today's allowance used · resets in 5 h", from the account's usage report. */
 export function describeUsage(info: AccountInfo): string {

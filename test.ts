@@ -893,6 +893,7 @@ async function runTests() {
   await testState0180(test)
   await testRelease0190()
   await testRelease0191()
+  await testRelease0192()
 
   // Print results
   const passed = results.filter(r => r.pass).length
@@ -2455,4 +2456,20 @@ async function testRelease0191() {
     isTerminalGone(err('EIO', 'write')) && isTerminalGone(err('EPIPE', 'write')) && isTerminalGone(err('ENXIO', undefined, 'write ENXIO')))
   await test('Safety net: other errors still count as crashes', async () =>
     !isTerminalGone(err('EIO', 'read')) && !isTerminalGone(err('ENOENT', 'open')) && !isTerminalGone(new Error('boom')) && !isTerminalGone(undefined))
+}
+
+async function testRelease0192() {
+  const { planLabel } = await import('./src/auth/accounts.js')
+  const { planMessage } = await import('./src/auth/onboarding.js')
+  await test('Plan: a running trial shows its end date; other plans show their name', async () => {
+    const trial = planLabel({ tier: 'builder', trial_ends_at: '2026-11-21T08:00:00Z' })
+    return /^Builder trial until Nov 2[01]$/.test(trial)
+      && planLabel({ tier: 'free' }) === 'Free' && planLabel({ tier: 'power', trial_ends_at: null }) === 'Power'
+      && planLabel({ tier: 'builder', trial_ends_at: 'not a date' }) === 'Builder'
+  })
+  await test('Sign-up: prints the server\'s plan line, one line and bounded; nothing when it sends none', async () => {
+    const line = planMessage({ plan_message: "You're on Builder free\nuntil November 21." })
+    return line === "You're on Builder free until November 21." && planMessage({}) === undefined && planMessage({ plan_message: 42 }) === undefined
+      && (planMessage({ plan_message: 'x'.repeat(1000) })?.length ?? 0) <= 240
+  })
 }

@@ -2,6 +2,11 @@
 
 Release notes for [darce-cli](https://www.npmjs.com/package/darce-cli). Newest first.
 
+## 0.19.2
+
+- **New accounts start with a free week of Builder.** `darce signup` and signing up on darce.dev now put you on Builder for 7 days: Claude Sonnet and the bigger models, and about 7× the Free allowance. No card is needed. You get an email the day before it ends, and after that you move to Free unless you upgrade.
+- **Darce shows when your trial ends.** The account line at startup and `/account` say "Builder trial until Nov 21" while a trial or beta code is running.
+
 ## 0.19.1
 
 - **The second opinion on scripts works again.** Before Darce runs a script on its own (like `npm run deploy`), it asks whether the script changes anything outside your computer. That check had been failing on Darce's side, so every script fell back to the local rules alone. It's fixed on the server for every version, answers in about a second, and Darce now waits up to 4 seconds for it instead of 2.
